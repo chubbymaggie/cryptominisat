@@ -1,23 +1,25 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
 
 #ifndef SOLVERTYPES_H
 #define SOLVERTYPES_H
@@ -34,7 +36,7 @@
 #include <limits>
 #include <cassert>
 #include "solverconf.h"
-#include "cryptominisat4/solvertypesmini.h"
+#include "cryptominisat5/solvertypesmini.h"
 
 namespace CMSat {
 
@@ -42,6 +44,8 @@ using std::vector;
 using std::cout;
 using std::endl;
 using std::string;
+
+enum class gret{confl, unit_confl, prop, unit_prop, nothing, nothing_fnewwatch};
 
 inline std::string restart_type_to_string(const Restart type)
 {
@@ -65,6 +69,30 @@ inline std::string restart_type_to_string(const Restart type)
     assert(false && "oops, one of the restart types has no string name");
 
     return "Ooops, undefined!";
+}
+
+inline std::string restart_type_to_short_string(const Restart type)
+{
+    switch(type) {
+        case Restart::glue:
+            return "glue";
+
+        case Restart::geom:
+            return "geom";
+
+        case Restart::luby:
+            return "luby";
+
+        case Restart::glue_geom:
+            return "gl/geo";
+
+        case Restart::never:
+            return "never";
+    }
+
+        assert(false && "oops, one of the restart types has no string name");
+
+        return "ERR: undefined!";
 }
 
 //Removed by which algorithm. NONE = not eliminated
@@ -166,12 +194,12 @@ inline double stats_line_percent(double num, double total)
     }
 }
 
-inline void print_value_kilo_mega(const uint64_t value)
+inline void print_value_kilo_mega(const int64_t value)
 {
-    if (value > 20*1000ULL*1000ULL) {
-        cout << " " << std::setw(4) << value/(1000ULL*1000ULL) << "M";
-    } else if (value > 20ULL*1000ULL) {
-        cout << " " << std::setw(4) << value/1000 << "K";
+    if (value > 20*1000LL*1000LL) {
+        cout << " " << std::setw(4) << value/(1000LL*1000LL) << "M";
+    } else if (value > 20LL*1000LL) {
+        cout << " " << std::setw(4) << value/1000LL << "K";
     } else {
         cout << " " << std::setw(5) << value;
     }
@@ -272,8 +300,6 @@ struct PropStats
         propsUnit += other.propsUnit;
         propsBinIrred += other.propsBinIrred;
         propsBinRed += other.propsBinRed;
-        propsTriIrred += other.propsTriIrred;
-        propsTriRed += other.propsTriRed;
         propsLongIrred += other.propsLongIrred;
         propsLongRed += other.propsLongRed;
 
@@ -296,8 +322,6 @@ struct PropStats
         propsUnit -= other.propsUnit;
         propsBinIrred -= other.propsBinIrred;
         propsBinRed -= other.propsBinRed;
-        propsTriIrred -= other.propsTriIrred;
-        propsTriRed -= other.propsTriRed;
         propsLongIrred -= other.propsLongIrred;
         propsLongRed -= other.propsLongRed;
 
@@ -358,16 +382,6 @@ struct PropStats
             , "% of propagations"
         );
 
-        print_stats_line("c propsTriIred", propsTriIrred
-            , stats_line_percent(propsTriIrred, propagations)
-            , "% of propagations"
-        );
-
-        print_stats_line("c propsTriRed", propsTriRed
-            , stats_line_percent(propsTriRed, propagations)
-            , "% of propagations"
-        );
-
         print_stats_line("c propsLongIrred", propsLongIrred
             , stats_line_percent(propsLongIrred, propagations)
             , "% of propagations"
@@ -406,8 +420,6 @@ struct PropStats
     uint64_t propsUnit = 0;
     uint64_t propsBinIrred = 0;
     uint64_t propsBinRed = 0;
-    uint64_t propsTriIrred = 0;
-    uint64_t propsTriRed = 0;
     uint64_t propsLongIrred = 0;
     uint64_t propsLongRed = 0;
 
@@ -423,8 +435,6 @@ enum class ConflCausedBy {
     , longred
     , binred
     , binirred
-    , triirred
-    , trired
 };
 
 struct ConflStats
@@ -439,8 +449,6 @@ struct ConflStats
     {
         conflsBinIrred += other.conflsBinIrred;
         conflsBinRed += other.conflsBinRed;
-        conflsTriIrred += other.conflsTriIrred;
-        conflsTriRed += other.conflsTriRed;
         conflsLongIrred += other.conflsLongIrred;
         conflsLongRed += other.conflsLongRed;
 
@@ -453,8 +461,6 @@ struct ConflStats
     {
         conflsBinIrred -= other.conflsBinIrred;
         conflsBinRed -= other.conflsBinRed;
-        conflsTriIrred -= other.conflsTriIrred;
-        conflsTriRed -= other.conflsTriRed;
         conflsLongIrred -= other.conflsLongIrred;
         conflsLongRed -= other.conflsLongRed;
 
@@ -472,12 +478,6 @@ struct ConflStats
             case ConflCausedBy::binred :
                 conflsBinRed++;
                 break;
-            case ConflCausedBy::triirred :
-                conflsTriIrred++;
-                break;
-            case ConflCausedBy::trired :
-                conflsTriRed++;
-                break;
             case ConflCausedBy::longirred :
                 conflsLongIrred++;
                 break;
@@ -489,20 +489,24 @@ struct ConflStats
         }
     }
 
-    void print_short(double cpu_time) const
+    void print_short(double cpu_time, bool do_print_times) const
     {
         //Search stats
-        print_stats_line("c conflicts", numConflicts
-            , ratio_for_stat(numConflicts, cpu_time)
-            , "/ sec"
-        );
+        if (!do_print_times) {
+            print_stats_line("c conflicts", numConflicts);
+        } else {
+            print_stats_line("c conflicts", numConflicts
+                , ratio_for_stat(numConflicts, cpu_time)
+                , "/ sec"
+            );
+        }
     }
 
-    void print(double cpu_time) const
+    void print(double cpu_time, bool do_print_times) const
     {
         //Search stats
         cout << "c CONFLS stats" << endl;
-        print_short(cpu_time);
+        print_short(cpu_time, do_print_times);
 
         print_stats_line("c conflsBinIrred", conflsBinIrred
             , stats_line_percent(conflsBinIrred, numConflicts)
@@ -511,16 +515,6 @@ struct ConflStats
 
         print_stats_line("c conflsBinRed", conflsBinRed
             , stats_line_percent(conflsBinRed, numConflicts)
-            , "%"
-        );
-
-        print_stats_line("c conflsTriIrred", conflsTriIrred
-            , stats_line_percent(conflsTriIrred, numConflicts)
-            , "%"
-        );
-
-        print_stats_line("c conflsTriIrred", conflsTriRed
-            , stats_line_percent(conflsTriRed, numConflicts)
             , "%"
         );
 
@@ -536,7 +530,6 @@ struct ConflStats
 
         long diff = (long)numConflicts
             - (long)(conflsBinIrred + (long)conflsBinRed
-                + (long)conflsTriIrred + (long)conflsTriRed
                 + (long)conflsLongIrred + (long)conflsLongRed
             );
 
@@ -545,10 +538,10 @@ struct ConflStats
             << "c DEBUG"
             << "((int)numConflicts - (int)(conflsBinIrred + conflsBinRed"
             << endl
-            << "c  + conflsTriIrred + conflsTriRed + conflsLongIrred + conflsLongRed)"
+            << "c  + conflsLongIrred + conflsLongRed)"
             << " = "
             << (((int)numConflicts - (int)(conflsBinIrred + conflsBinRed
-                + conflsTriIrred + conflsTriRed + conflsLongIrred + conflsLongRed)))
+                + conflsLongIrred + conflsLongRed)))
             << endl;
 
             //assert(diff == 0);
@@ -557,8 +550,6 @@ struct ConflStats
 
     uint64_t conflsBinIrred = 0;
     uint64_t conflsBinRed = 0;
-    uint64_t conflsTriIrred = 0;
-    uint64_t conflsTriRed = 0;
     uint64_t conflsLongIrred = 0;
     uint64_t conflsLongRed = 0;
 

@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "hyperengine.h"
 #include "clauseallocator.h"
@@ -128,18 +129,6 @@ Lit HyperEngine::propagate_bfs(const uint64_t timeout)
             if (i->isBin()) {
                 *j++ = *i;
                 continue;
-            }
-
-            if (i->isTri()) {
-                *j++ = *i;
-                ret = prop_tri_clause_with_acestor_info(i, p, confl);
-                if (ret == PROP_SOMETHING || ret == PROP_FAIL) {
-                    i++;
-                    break;
-                } else {
-                    assert(ret == PROP_NOTHING);
-                    continue;
-                }
             }
 
             if (i->isClause()) {
@@ -338,18 +327,6 @@ Lit HyperEngine::prop_larger_than_bin_cl_dfs(
         if (i->isBin()) {
             *j++ = *i;
             continue;
-        }
-
-        if (i->isTri()) {
-            *j++ = *i;
-            ret = prop_tri_clause_with_acestor_info(i, p, confl);
-            if (ret == PROP_SOMETHING || ret == PROP_FAIL) {
-                i++;
-                break;
-            } else {
-                assert(ret == PROP_NOTHING);
-                continue;
-            }
         }
 
         if (i->isClause()) {
@@ -552,7 +529,11 @@ void HyperEngine::add_hyper_bin(const Lit p)
         cout << "Adding hyper-bin clause: " << p << " , " << ~deepestAncestor << endl;
         #endif
         needToAddBinClause.insert(BinaryClause(p, ~deepestAncestor, true));
-        *drat << p << (~deepestAncestor) << fin;
+        *drat << add
+        #ifdef STATS_NEEDED
+        << clauseID++ << sumConflicts
+        #endif
+        << p << (~deepestAncestor) << fin;
 
         hyperBinNotAdded = false;
     } else {
@@ -750,33 +731,6 @@ bool HyperEngine::is_ancestor_of(
     return false;
 }
 
-void HyperEngine::add_hyper_bin(const Lit lit1, const Lit lit2, const Lit lit3)
-{
-    assert(value(lit1.var()) == l_Undef);
-
-    #ifdef VERBOSE_DEBUG_FULLPROP
-    print_trail();
-    cout << "Enqueing " << lit1
-    << " with ancestor 3-long clause: " << lit1 << " , "
-    << lit2 << " (lev:" << varData[lit2.var()].level << ") "
-    << lit3 << " (lev:" << varData[lit3.var()].level << ") "
-    << endl;
-    #endif
-
-    assert(value(lit2) == l_False);
-    assert(value(lit3) == l_False);
-
-    currAncestors.clear();
-    if (varData[lit2.var()].level != 0) {
-        currAncestors.push_back(~lit2);
-    }
-
-    if (varData[lit3.var()].level != 0)
-        currAncestors.push_back(~lit3);
-
-    add_hyper_bin(lit1);
-}
-
 void HyperEngine::add_hyper_bin(const Lit p, const Clause& cl)
 {
     assert(value(p.var()) == l_Undef);
@@ -814,13 +768,6 @@ Lit HyperEngine::analyzeFail(const PropBy propBy)
     //Each literal in the clause is an ancestor. So just 'push' them inside the
     //'currAncestors' variable
     switch(propBy.getType()) {
-        case tertiary_t : {
-            const Lit lit = ~propBy.lit3();
-            if (varData[lit.var()].level != 0)
-                currAncestors.push_back(lit);
-            //intentionally falling through here
-            //i.e. there is no 'break' here for a reason
-        }
         case binary_t: {
             const Lit lit = ~propBy.lit2();
             if (varData[lit.var()].level != 0)
@@ -1048,6 +995,9 @@ PropResult HyperEngine::prop_normal_cl_with_ancestor_info(
     propStats.bogoProps += 4;
     const ClOffset offset = i->get_offset();
     Clause& c = *cl_alloc.ptr(offset);
+    #ifdef STATS_NEEDED
+    c.stats.clause_looked_at++;
+    #endif
 
     PropResult ret = prop_normal_helper(c, offset, j, p);
     if (ret != PROP_TODO)
@@ -1070,61 +1020,6 @@ PropResult HyperEngine::prop_normal_cl_with_ancestor_info(
 
     add_hyper_bin(c[0], c);
 
-    return PROP_SOMETHING;
-}
-
-PropResult HyperEngine::prop_tri_clause_with_acestor_info(
-    Watched*& i
-    , const Lit lit1
-    , PropBy& confl
-) {
-    const Lit lit2 = i->lit2();
-    lbool val2 = value(lit2);
-
-    //literal is already satisfied, nothing to do
-    if (val2 == l_True)
-        return PROP_NOTHING;
-
-    const Lit lit3 = i->lit3();
-    lbool val3 = value(lit3);
-
-    //literal is already satisfied, nothing to do
-    if (val3 == l_True)
-        return PROP_NOTHING;
-
-    if (val2 == l_False && val3 == l_False) {
-        return handle_prop_tri_fail(i, lit1, confl);
-    }
-
-    if (val2 == l_Undef && val3 == l_False) {
-        return propTriHelperComplex(lit2, ~lit1, lit3, i->red());
-    }
-
-    if (val3 == l_Undef && val2 == l_False) {
-        return propTriHelperComplex(lit3, ~lit1,  lit2, i->red());
-    }
-
-    return PROP_NOTHING;
-}
-
-PropResult HyperEngine::propTriHelperComplex(
-    const Lit lit1
-    , const Lit lit2
-    , const Lit lit3
-    , const bool
-    #ifdef STATS_NEEDED
-    red
-    #endif
-) {
-    #ifdef STATS_NEEDED
-    if (red)
-        propStats.propsTriRed++;
-    else
-        propStats.propsTriIrred++;
-    #endif
-
-    //Not simple
-    add_hyper_bin(lit1, lit2, lit3);
     return PROP_SOMETHING;
 }
 

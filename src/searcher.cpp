@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "searcher.h"
 #include "occsimplifier.h"
@@ -28,24 +29,28 @@
 #include "clausecleaner.h"
 #include "propbyforgraph.h"
 #include <algorithm>
+#include <sstream>
 #include <cstddef>
 #include <cmath>
 #include <ratio>
 #include "sqlstats.h"
 #include "datasync.h"
 #include "reducedb.h"
-#include "gaussian.h"
 #include "sqlstats.h"
 #include "watchalgos.h"
+#include "hasher.h"
+#include "solverconf.h"
+#include "distillerlong.h"
+#include "xorfinder.h"
+#include "matrixfinder.h"
+#ifdef USE_GAUSS
+#include "EGaussian.h"
+#endif
 //#define DEBUG_RESOLV
 
 using namespace CMSat;
 using std::cout;
 using std::endl;
-
-#ifdef USE_OMP
-#include <omp.h>
-#endif
 
 //#define VERBOSE_DEBUG_GEN_CONFL_DOT
 
@@ -63,55 +68,78 @@ Searcher::Searcher(const SolverConf *_conf, Solver* _solver, std::atomic<bool>* 
         )
 
         //variables
+        #ifdef USE_GAUSS
+        , sum_gauss_called (0)
+        , sum_gauss_confl  (0)
+        , sum_gauss_prop   (0)
+        , sum_gauss_unit_truths (0)
+        , sum_initEnGauss (0)
+        , sum_initUnit (0)
+        , sum_initTwo (0)
+        , sum_Enconflict (0)
+        , sum_Enpropagate(0)
+        , sum_Enunit(0)
+        , sum_EnGauss(0)
+        #endif //USE_GAUSS
         , solver(_solver)
-        , order_heap_glue(VarOrderLt(activ_glue))
         , cla_inc(1)
 {
-    var_decay = conf.var_decay_start;
-    var_inc = conf.var_inc_start;
+    var_decay_vsids = conf.var_decay_vsids_start;
+    step_size = solver->conf.orig_step_size;
+
+    var_inc_vsids = conf.var_inc_vsids_start;
     more_red_minim_limit_binary_actual = conf.more_red_minim_limit_binary;
     more_red_minim_limit_cache_actual = conf.more_red_minim_limit_cache;
     mtrand.seed(conf.origSeed);
     hist.setSize(conf.shortTermHistorySize, conf.blocking_restart_trail_hist_length);
-    conf.cur_max_temp_red_cls = conf.max_temporary_learnt_clauses;
+    cur_max_temp_red_lev2_cls = conf.max_temp_lev2_learnt_clauses;
 }
 
 Searcher::~Searcher()
 {
-    clear_gauss();
+    #ifdef USE_GAUSS
+    clearEnGaussMatrixes();
+    #endif
 }
 
 void Searcher::new_var(const bool bva, const uint32_t orig_outer)
 {
     PropEngine::new_var(bva, orig_outer);
 
-    activ_glue.push_back(0);
-    insertVarOrder((int)nVars()-1);
+    var_act_vsids.push_back(0);
+    var_act_maple.push_back(0);
+    insert_var_order_all((int)nVars()-1);
 }
 
 void Searcher::new_vars(size_t n)
 {
     PropEngine::new_vars(n);
 
-    activ_glue.resize(activ_glue.size() + n, 0);
+    var_act_vsids.insert(var_act_vsids.end(), n, 0);
+    var_act_maple.insert(var_act_maple.end(), n, 0);
     for(int i = n-1; i >= 0; i--) {
-        insertVarOrder((int)nVars()-i-1);
+        insert_var_order_all((int)nVars()-i-1);
     }
 }
 
 void Searcher::save_on_var_memory()
 {
     PropEngine::save_on_var_memory();
-    activ_glue.resize(nVars());
-    activ_glue.shrink_to_fit();
+
+    var_act_vsids.resize(nVars());
+    var_act_maple.resize(nVars());
+
+    var_act_vsids.shrink_to_fit();
+    var_act_maple.shrink_to_fit();
+
 }
 
 void Searcher::updateVars(
     const vector<uint32_t>& outerToInter
     , const vector<uint32_t>& interToOuter
 ) {
-    updateArray(activ_glue, interToOuter);
-    //activ_glue are not updated, they are taken from backup, which is updated
+    updateArray(var_act_vsids, interToOuter);
+    updateArray(var_act_maple, interToOuter);
 
     renumber_assumptions(outerToInter);
 }
@@ -130,7 +158,9 @@ template<bool update_bogoprops>
 inline void Searcher::add_lit_to_learnt(
     const Lit lit
 ) {
-    antec_data.vsids_all_incoming_vars.push(activ_glue[lit.var()]/var_inc);
+    #ifdef STATS_NEEDED
+    antec_data.vsids_all_incoming_vars.push(var_act_vsids[lit.var()]/var_inc_vsids);
+    #endif
     const uint32_t var = lit.var();
     assert(varData[var].removed == Removed::none);
 
@@ -138,36 +168,25 @@ inline void Searcher::add_lit_to_learnt(
     if (seen[var] || varData[var].level == 0) {
         return;
     }
-
-    //Update our state of going through the conflict
-    bump_var_activity<update_bogoprops>(var);
     seen[var] = 1;
-    if (!update_bogoprops && conf.doOTFSubsume) {
-        tmp_learnt_clause_size++;
-        seen2[lit.toInt()] = 1;
-        tmp_learnt_clause_abst |= abst_var(lit.var());
+
+    if (!update_bogoprops) {
+        if (VSIDS) {
+            bump_vsids_var_act<update_bogoprops>(var, 0.5);
+            implied_by_learnts.push_back(var);
+        } else {
+            varData[var].conflicted++;
+        }
+
+        if (conf.doOTFSubsume) {
+            tmp_learnt_clause_size++;
+            seen2[lit.toInt()] = 1;
+            tmp_learnt_clause_abst |= abst_var(lit.var());
+        }
     }
 
     if (varData[var].level >= decisionLevel()) {
         pathC++;
-
-        if (!update_bogoprops && varData[var].reason != PropBy()) {
-            if (varData[var].reason.getType() == clause_t) {
-                Clause* cl = cl_alloc.ptr(varData[var].reason.get_offset());
-                if (cl->red()) {
-                    const uint32_t glue = cl->stats.glue;
-                    implied_by_learnts.push_back(std::make_pair(var, glue));
-                }
-            } else if (varData[var].reason.getType() == binary_t
-                && varData[var].reason.isRedStep()
-            ) {
-                implied_by_learnts.push_back(std::make_pair(var, 2));
-            } else if (varData[var].reason.getType() == tertiary_t
-                && varData[var].reason.isRedStep()
-            ) {
-                implied_by_learnts.push_back(std::make_pair(var, 3));
-            }
-        }
     } else {
         learnt_clause.push_back(lit);
     }
@@ -217,7 +236,12 @@ void Searcher::create_otf_subsuming_implicit_clause(const Clause& cl)
         cout  << endl;
     }
 
-    if (drat->enabled()) {
+    if (drat->enabled() || solver->conf.simulate_drat) {
+        *drat << add
+        #ifdef STATS_NEEDED
+        << solver->clauseID++ << sumConflicts
+        #endif
+        ;
         for(unsigned  i = 0; i < newCl.size; i++) {
             *drat << newCl.lits[i];
         }
@@ -254,8 +278,19 @@ void Searcher::create_otf_subsuming_long_clause(
         cout
         << "New smaller clause OTF:" << cl << endl;
     }
-    *drat << cl << fin << findelay;
+    #ifdef STATS_NEEDED
+    cl.stats.ID = clauseID;
+    #endif
+    *drat << add << cl
+    #ifdef STATS_NEEDED
+    << sumConflicts
+    #endif
+    << fin << findelay;
     otf_subsuming_long_cls.push_back(offset);
+
+    #ifdef STATS_NEEDED
+    clauseID++;
+    #endif
 }
 
 void Searcher::check_otf_subsume(const ClOffset offset, Clause& cl)
@@ -269,7 +304,7 @@ void Searcher::check_otf_subsume(const ClOffset offset, Clause& cl)
     if (num_lits_from_cl != tmp_learnt_clause_size)
         return;
 
-    if (num_lits_from_cl <= 3) {
+    if (num_lits_from_cl <= 2) {
         create_otf_subsuming_implicit_clause(cl);
     } else {
         create_otf_subsuming_long_clause(cl, offset);
@@ -299,10 +334,6 @@ void Searcher::normalClMinim()
                 size = 1;
                 break;
 
-            case tertiary_t:
-                size = 2;
-                break;
-
             default:
                 release_assert(false);
                 std::exit(-1);
@@ -317,14 +348,6 @@ void Searcher::normalClMinim()
 
                 case binary_t:
                     p = reason.lit2();
-                    break;
-
-                case tertiary_t:
-                    if (k == 0) {
-                        p = reason.lit2();
-                    } else {
-                        p = reason.lit3();
-                    }
                     break;
 
                 default:
@@ -348,11 +371,6 @@ void Searcher::debug_print_resolving_clause(const PropBy confl) const
     (void) confl;
 #else
     switch(confl.getType()) {
-        case tertiary_t: {
-            cout << "resolv (tri): " << confl.lit2() << ", " << confl.lit3() << endl;
-            break;
-        }
-
         case binary_t: {
             cout << "resolv bin: " << confl.lit2() << endl;
             break;
@@ -384,13 +402,26 @@ void Searcher::update_clause_glue_from_analysis(Clause* cl)
     assert(cl->red());
     const unsigned new_glue = calc_glue(*cl);
 
-    if (new_glue + 1 < cl->stats.glue) {
-        cl->stats.glue = new_glue;
-
-        if (new_glue <= conf.protect_cl_if_improved_glue_below_this_glue_for_one_turn) {
+    if (new_glue < cl->stats.glue) {
+        if (cl->stats.glue <= conf.protect_cl_if_improved_glue_below_this_glue_for_one_turn) {
             cl->stats.ttl = 1;
         }
-    }
+        cl->stats.glue = new_glue;
+
+        //move to lev0 if very low glue
+        if (new_glue <= conf.glue_put_lev0_if_below_or_eq
+            && cl->stats.which_red_array >= 1
+        ) {
+            cl->stats.which_red_array = 0;
+        } else {
+            //move to lev1 if low glue
+            if (new_glue <= conf.glue_put_lev1_if_below_or_eq
+                && solver->conf.glue_put_lev1_if_below_or_eq != 0
+            ) {
+                cl->stats.which_red_array = 1;
+            }
+        }
+     }
 }
 
 template<bool update_bogoprops>
@@ -404,23 +435,16 @@ Clause* Searcher::add_literals_from_confl_to_learnt(
 
     Clause* cl = NULL;
     switch (confl.getType()) {
-        case tertiary_t : {
-            if (confl.isRedStep()) {
-                antec_data.triRed++;
-                stats.resolvs.triRed++;
-            } else {
-                antec_data.triIrred++;
-                stats.resolvs.triIrred++;
-            }
-            break;
-        }
-
         case binary_t : {
             if (confl.isRedStep()) {
+                #ifdef STATS_NEEDED
                 antec_data.binRed++;
+                #endif
                 stats.resolvs.binRed++;
             } else {
+                #ifdef STATS_NEEDED
                 antec_data.binIrred++;
+                #endif
                 stats.resolvs.binIrred++;
             }
             break;
@@ -433,33 +457,41 @@ Clause* Searcher::add_literals_from_confl_to_learnt(
                 #ifdef STATS_NEEDED
                 antec_data.vsids_of_ants.push(cl->stats.antec_data.vsids_vars.avg());
                 antec_data.longRed++;
-                antec_data.age_long_reds.push(sumConflicts() - cl->stats.introduced_at_conflict);
+                antec_data.age_long_reds.push(sumConflicts - cl->stats.introduced_at_conflict);
                 antec_data.glue_long_reds.push(cl->stats.glue);
                 #endif
             } else {
+                #ifdef STATS_NEEDED
                 antec_data.longIrred++;
+                #endif
                 stats.resolvs.longRed++;
             }
-            antec_data.size_longs.push(cl->size());
-
             #ifdef STATS_NEEDED
+            antec_data.size_longs.push(cl->size());
             cl->stats.used_for_uip_creation++;
             #endif
-            if (!update_bogoprops
-                && cl->red()
-                && cl->stats.glue > conf.glue_must_keep_clause_if_below_or_eq
-                && cl->stats.ttl == 0
-            ) {
-                bumpClauseAct(cl);
-            }
 
             if (!update_bogoprops
-                && conf.update_glues_on_analyze
                 && cl->red()
-                && cl->stats.glue > conf.glue_must_keep_clause_if_below_or_eq
+                && cl->stats.which_red_array != 0
             ) {
-                update_clause_glue_from_analysis(cl);
+                if (conf.update_glues_on_analyze) {
+                    update_clause_glue_from_analysis(cl);
+                }
+
+                //If STATS_NEEDED then bump acitvity of ALL clauses
+                if (cl->stats.which_red_array == 1) {
+                    cl->stats.last_touched = sumConflicts;
+                } else if (cl->stats.which_red_array == 2) {
+                    #ifndef STATS_NEEDED
+                    bump_cl_act<update_bogoprops>(cl);
+                    #endif
+                }
+                #ifdef STATS_NEEDED
+                bump_cl_act<update_bogoprops>(cl);
+                #endif
             }
+
             break;
         }
 
@@ -473,16 +505,6 @@ Clause* Searcher::add_literals_from_confl_to_learnt(
     Lit x = lit_Undef;
     while(cont) {
         switch (confl.getType()) {
-            case tertiary_t:
-                if (i == 0) {
-                    x = failBinLit;
-                } else if (i == 1) {
-                    x = confl.lit2();
-                } else {
-                    x = confl.lit3();
-                    cont = false;
-                }
-                break;
             case binary_t:
                 if (i == 0) {
                     x = failBinLit;
@@ -492,13 +514,15 @@ Clause* Searcher::add_literals_from_confl_to_learnt(
                 }
                 break;
 
-            case clause_t :
+            case clause_t:
                 assert(!cl->getRemoved());
                 x = (*cl)[i];
                 if (i == cl->size()-1) {
                     cont = false;
                 }
                 break;
+            case null_clause_t:
+                assert(false);
         }
         if (p == lit_Undef || i > 0) {
             add_lit_to_learnt<update_bogoprops>(x);
@@ -538,6 +562,7 @@ inline void Searcher::minimize_using_permdiff()
     if (conf.doMinimRedMore
         && learnt_clause.size() > 1
     ) {
+        stats.permDiff_attempt++;
         stats.moreMinimLitsStart += learnt_clause.size();
         watch_based_learnt_minim();
 
@@ -573,6 +598,8 @@ inline void Searcher::watch_based_learnt_minim()
             }
         }
         learnt_clause.resize(learnt_clause.size()-nb);
+        stats.permDiff_success++;
+        stats.permDiff_rem_lits+=nb;
     }
 }
 
@@ -618,7 +645,9 @@ inline Clause* Searcher::create_learnt_clause(PropBy confl)
         //This is for OTF subsumption ("OTF clause improvement" by Han&Somezi)
         //~p is essentially popped from the temporary learnt clause
         if (p != lit_Undef) {
-            antec_data.vsids_of_resolving_literals.push(activ_glue[p.var()]/var_inc);
+            #ifdef STATS_NEEDED
+            antec_data.vsids_of_resolving_literals.push(var_act_vsids[p.var()]/var_inc_vsids);
+            #endif
             if (!update_bogoprops && conf.doOTFSubsume) {
                 tmp_learnt_clause_size--;
                 assert(seen2[(~p).toInt()] == 1);
@@ -682,16 +711,79 @@ inline Clause* Searcher::create_learnt_clause(PropBy confl)
     return last_resolved_cl;
 }
 
-template<bool update_bogoprops>
-void Searcher::bump_var_activities_based_on_implied_by_learnts(const uint32_t glue)
-{
-    assert(!update_bogoprops);
-    for (const auto dat :implied_by_learnts) {
-        const uint32_t v_glue = dat.second;
-        if (v_glue < glue) {
-            bump_var_activity<update_bogoprops>(dat.first);
+void Searcher::simple_create_learnt_clause(
+    PropBy confl,
+    vector<Lit>& out_learnt,
+    bool True_confl
+) {
+    int until = -1;
+    int mypathC = 0;
+    Lit p = lit_Undef;
+    int index = trail.size() - 1;
+    assert(decisionLevel() == 1);
+
+    do {
+        if (!confl.isNULL()) {
+            if (confl.getType() == binary_t) {
+                if (p == lit_Undef && True_confl == false) {
+                    Lit q = failBinLit;
+                    if (!seen[q.var()]) {
+                        seen[q.var()] = 1;
+                        mypathC++;
+                    }
+                }
+                Lit q = confl.lit2();
+                if (!seen[q.var()]) {
+                    seen[q.var()] = 1;
+                    mypathC++;
+                }
+            } else {
+                const Clause& c = *solver->cl_alloc.ptr(confl.get_offset());
+
+                // if True_confl==true, then choose p begin with the 1st index of c
+                for (uint32_t j = (p == lit_Undef && True_confl == false) ? 0 : 1
+                    ; j < c.size()
+                    ; j++
+                ) {
+                    Lit q = c[j];
+                    assert(q.var() < seen.size());
+                    if (!seen[q.var()]) {
+                        seen[q.var()] = 1;
+                        mypathC++;
+                    }
+                }
+            }
+        } else {
+            assert(confl.isNULL());
+            out_learnt.push_back(~p);
         }
-    }
+        // if not break, while() will come to the index of trail blow 0, and fatal error occur;
+        if (mypathC == 0) {
+            break;
+        }
+        // Select next clause to look at:
+        while (!seen[trail[index--].var()]);
+        // if the reason cr from the 0-level assigned var, we must break avoid move forth further;
+        // but attention that maybe seen[x]=1 and never be clear. However makes no matter;
+        if ((int)trail_lim[0] > index + 1
+            && until == -1
+        ) {
+            until = out_learnt.size();
+        }
+        p = trail[index + 1];
+        confl = varData[p.var()].reason;
+
+        //under normal circumstances this does not happen, but here, it can
+        //reason is undefined for level 0
+        if (varData[p.var()].level == 0) {
+            confl = PropBy();
+        }
+        seen[p.var()] = 0;
+        mypathC--;
+    } while (mypathC >= 0);
+
+    if (until != -1)
+        out_learnt.resize(until);
 }
 
 Clause* Searcher::otf_subsume_last_resolved_clause(Clause* last_resolved_cl)
@@ -703,7 +795,7 @@ Clause* Searcher::otf_subsume_last_resolved_clause(Clause* last_resolved_cl)
         //Last was a lont clause
         || last_resolved_cl == NULL
         //Final clause will not be implicit
-        || learnt_clause.size() <= 3
+        || learnt_clause.size() <= 2
         //Larger or equivalent clauses cannot subsume the clause
         || learnt_clause.size() >= last_resolved_cl->size()
     ) {
@@ -742,6 +834,9 @@ Clause* Searcher::analyze_conflict(
     , uint32_t& glue
 ) {
     //Set up environment
+    #ifdef STATS_NEEDED
+    antec_data.clear();
+    #endif
     learnt_clause.clear();
     assert(toClear.empty());
     implied_by_learnts.clear();
@@ -756,32 +851,81 @@ Clause* Searcher::analyze_conflict(
     stats.litsRedNonMin += learnt_clause.size();
     minimize_learnt_clause<update_bogoprops>();
     stats.litsRedFinal += learnt_clause.size();
+
+    //further minimisation 1 -- short, small glue clauses
+    glue = std::numeric_limits<uint32_t>::max();
     if (learnt_clause.size() <= conf.max_size_more_minim) {
         glue = calc_glue(learnt_clause);
         if (glue <= conf.max_glue_more_minim) {
             minimize_using_permdiff();
         }
     }
-    glue = calc_glue(learnt_clause);
+    if (glue == std::numeric_limits<uint32_t>::max()) {
+        glue = calc_glue(learnt_clause);
+    }
     print_fully_minimized_learnt_clause();
 
     if (learnt_clause.size() > conf.max_size_more_minim
-        && glue <= conf.glue_must_keep_clause_if_below_or_eq
+        && glue <= (conf.glue_put_lev0_if_below_or_eq+2)
+        && conf.doMinimRedMoreMore
     ) {
-        minimise_redundant_more(learnt_clause);
+        minimise_redundant_more_more(learnt_clause);
     }
 
     out_btlevel = find_backtrack_level_of_learnt();
-    if (!update_bogoprops
-        && conf.extra_bump_var_activities_based_on_glue
-    ) {
-        bump_var_activities_based_on_implied_by_learnts<update_bogoprops>(glue);
+    if (!update_bogoprops) {
+        if (VSIDS) {
+            bump_var_activities_based_on_implied_by_learnts<update_bogoprops>(out_btlevel);
+        } else {
+            uint32_t bump_by = 2;
+            if (conf.more_maple_bump_high_glue) {
+                if (glue <= 3) {
+                    bump_by = 1;
+                }
+            }
+            assert(toClear.empty());
+            const Lit p = learnt_clause[0];
+            seen[p.var()] = true;
+            toClear.push_back(p);
+            for (int i = learnt_clause.size() - 1; i >= 0; i--) {
+                const uint32_t v = learnt_clause[i].var();
+                if (varData[v].reason.isClause()) {
+                    ClOffset offs = varData[v].reason.get_offset();
+                    Clause* cl = cl_alloc.ptr(offs);
+                    for (const Lit l: *cl) {
+                        if (!seen[l.var()]) {
+                            seen[l.var()] = true;
+                            varData[l.var()].conflicted+=bump_by;
+                            toClear.push_back(l);
+                        }
+                    }
+                } else if (varData[v].reason.getType() == binary_t) {
+                    Lit l = varData[v].reason.lit2();
+                    if (!seen[l.var()]) {
+                        seen[l.var()] = true;
+                        varData[l.var()].conflicted+=bump_by;
+                        toClear.push_back(l);
+                    }
+                    l = Lit(v, false);
+                    if (!seen[l.var()]) {
+                        seen[l.var()] = true;
+                        varData[l.var()].conflicted+=bump_by;
+                        toClear.push_back(l);
+                    }
+                }
+            }
+            for (Lit l: toClear) {
+                seen[l.var()] = 0;
+            }
+            toClear.clear();
+        }
     }
-    implied_by_learnts.clear();
 
+    #ifdef STATS_NEEDED
     for(const Lit l: learnt_clause) {
-        antec_data.vsids_vars.push(activ_glue[l.var()]/var_inc);
+        antec_data.vsids_vars.push(var_act_vsids[l.var()]/var_inc_vsids);
     }
+    #endif
 
     return otf_subsume_last_resolved_clause(last_resolved_cl);
 
@@ -821,10 +965,6 @@ bool Searcher::litRedundant(const Lit p, uint32_t abstract_levels)
                 size = 1;
                 break;
 
-            case tertiary_t:
-                size = 2;
-                break;
-
             case null_clause_t:
             default:
                 release_assert(false);
@@ -842,14 +982,6 @@ bool Searcher::litRedundant(const Lit p, uint32_t abstract_levels)
 
                 case binary_t:
                     p2 = reason.lit2();
-                    break;
-
-                case tertiary_t:
-                    if (i == 0) {
-                        p2 = reason.lit2();
-                    } else {
-                        p2 = reason.lit3();
-                    }
                     break;
 
                 case null_clause_t:
@@ -947,13 +1079,6 @@ void Searcher::analyze_final_confl_with_assumptions(const Lit p, vector<Lit>& ou
                         }
                         break;
                     }
-                    case PropByType::tertiary_t: {
-                        const Lit lit = reason.lit3();
-                        if (varData[lit.var()].level > 0) {
-                            seen[lit.var()] = 1;
-                        }
-                        //NO break!
-                    }
                     case PropByType::binary_t: {
                         const Lit lit = reason.lit2();
                         if (varData[lit.var()].level > 0) {
@@ -1008,10 +1133,11 @@ void Searcher::update_assump_conflict_to_orig_outside(vector<Lit>& out_conflict)
 void Searcher::check_blocking_restart()
 {
     if (conf.do_blocking_restart
-        && sumConflicts() > conf.lower_bound_for_blocking_restart
+        && sumConflicts > conf.lower_bound_for_blocking_restart
         && hist.glueHist.isvalid()
         && hist.trailDepthHistLonger.isvalid()
         && decisionLevel() > 0
+        && trail_lim.size() > 0
         && trail.size() > hist.trailDepthHistLonger.avg()*conf.blocking_restart_multip
     ) {
         hist.glueHist.clear();
@@ -1027,6 +1153,10 @@ template<bool update_bogoprops>
 lbool Searcher::search()
 {
     assert(ok);
+    #ifdef SLOW_DEBUG
+    check_no_duplicate_lits_anywhere();
+    check_order_heap_sanity();
+    #endif
     const double myTime = cpuTime();
 
     //Stats reset & update
@@ -1042,62 +1172,63 @@ lbool Searcher::search()
     //Loop until restart or finish (SAT/UNSAT)
     blocked_restart = false;
     PropBy confl;
-
     lbool dec_ret = l_Undef;
     while (!params.needToStopSearch
         || !confl.isNULL() //always finish the last conflict
     ) {
+        #ifdef USE_GAUSS
+        gqhead = qhead;
+        #endif
+        if (update_bogoprops) {
+            confl = propagate<update_bogoprops>();
+        } else {
+            confl = propagate_any_order_fast();
+        }
+
         if (!confl.isNULL()) {
-            if (((stats.conflStats.numConflicts & 0xfff) == 0xfff)
-                && var_decay < conf.var_decay_max
-                && !update_bogoprops
-            ) {
-                var_decay += 0.01;
+            //manipulate startup parameters
+            if (!update_bogoprops) {
+                if (VSIDS &&
+                    ((stats.conflStats.numConflicts & 0xfff) == 0xfff) &&
+                    var_decay_vsids < conf.var_decay_vsids_max
+                ) {
+                    var_decay_vsids += 0.01;
+                }
+                if (!VSIDS && step_size > solver->conf.min_step_size) {
+                    step_size -= solver->conf.step_size_dec;
+                }
             }
 
             #ifdef STATS_NEEDED
             stats.conflStats.update(lastConflictCausedBy);
             #endif
 
-            #ifdef USE_GAUSS
-            confl:
-            #endif
             print_restart_stat();
             if (!update_bogoprops) {
                 #ifdef STATS_NEEDED
-                hist.trailDepthHist.push(trail.size()); //TODO  - trail_lim[0]
+                hist.trailDepthHist.push(trail.size());
                 #endif
-                hist.trailDepthHistLonger.push(trail.size()); //TODO  - trail_lim[0]
-                check_blocking_restart();
+                hist.trailDepthHistLonger.push(trail.size());
             }
             if (!handle_conflict<update_bogoprops>(confl)) {
-                dump_search_sql(myTime);
-                dump_search_loop_stats();
+                dump_search_loop_stats(myTime);
                 return l_False;
             }
-            reduce_db_if_needed();
             check_need_restart();
         } else {
             assert(ok);
             #ifdef USE_GAUSS
-            bool at_least_one_continue = false;
-            for (Gaussian* g: gauss_matrixes) {
-                gauss_ret ret = g->find_truths();
-                switch (ret) {
-                    case gauss_cont:
-                        at_least_one_continue = true;
-                        break;
-                    case gauss_false:
-                        return l_False;
-                    case gauss_confl:
-                        confl = g->found_conflict;
-                        goto confl;
+            if (!update_bogoprops) {
+                llbool ret = Gauss_elimination();
+                if (ret == l_Continue) {
+                    check_need_restart();
+                    continue;
+                //TODO conflict should be goto-d to "confl" label
+                } else if (ret != l_Nothing) {
+                    dump_search_loop_stats(myTime);
+                    return ret;
                 }
             }
-            if (at_least_one_continue) {
-                goto prop;
-            }
-            assert(ok);
             #endif //USE_GAUSS
 
             if (decisionLevel() == 0
@@ -1105,41 +1236,34 @@ lbool Searcher::search()
             ) {
                 return l_False;
             };
-
-            dec_ret = new_decision();
+            reduce_db_if_needed();
+            dec_ret = new_decision<update_bogoprops>();
             if (dec_ret != l_Undef) {
-                dump_search_sql(myTime);
-                dump_search_loop_stats();
+                dump_search_loop_stats(myTime);
                 return dec_ret;
             }
-        }
-
-        #ifdef USE_GAUSS
-        prop:
-        #endif
-
-        if (update_bogoprops) {
-            confl = propagate<update_bogoprops>();
-        } else {
-            confl = propagate_any_order_fast();
         }
     }
     max_confl_this_phase -= (int64_t)params.conflictsDoneThisRestart;
 
-    cancelUntil(0);
+    cancelUntil<true, update_bogoprops>(0);
+    confl = propagate<update_bogoprops>();
+    if (!confl.isNULL()) {
+        ok = false;
+        return l_False;
+    }
     assert(solver->prop_at_head());
     if (!solver->datasync->syncData()) {
         return l_False;
     }
-    dump_search_sql(myTime);
-    dump_search_loop_stats();
+    dump_search_loop_stats(myTime);
 
     return l_Undef;
 }
 
 void Searcher::dump_search_sql(const double myTime)
 {
-    if (solver->sqlStats && conf.dump_individual_search_time) {
+    if (solver->sqlStats) {
         solver->sqlStats->time_passed_min(
             solver
             , "search"
@@ -1154,6 +1278,7 @@ void Searcher::dump_search_sql(const double myTime)
 @returns l_Undef if it should restart instead. l_False if it reached UNSAT
          (through simplification)
 */
+template<bool update_bogoprops>
 lbool Searcher::new_decision()
 {
     Lit next = lit_Undef;
@@ -1165,17 +1290,6 @@ lbool Searcher::new_decision()
         if (value(p) == l_True) {
             // Dummy decision level:
             new_decision_level();
-            //To store matrix in case it needs to be stored. No new information
-            //is meant to be available at this point.
-            #ifdef USE_GAUSS
-            //These are not supposed to be changed *at all* by the funciton
-            //since it has already been called before
-            for (Gaussian* g: gauss_matrixes) {
-                gauss_ret ret = g->find_truths();
-                assert(ret == gauss_nothing);
-            }
-            #endif //USE_GAUSS
-
         } else if (value(p) == l_False) {
             analyze_final_confl_with_assumptions(~p, conflict);
             return l_False;
@@ -1202,18 +1316,21 @@ lbool Searcher::new_decision()
     // Increase decision level and enqueue 'next'
     assert(value(next) == l_Undef);
     new_decision_level();
-    enqueue(next);
+    enqueue<update_bogoprops>(next);
 
     return l_Undef;
 }
 
 double Searcher::luby(double y, int x)
 {
-    int size, seq;
-    for (size = 1, seq = 0
+    int size = 1;
+    int seq;
+    for (seq = 0
         ; size < x + 1
-        ; seq++, size = 2 * size + 1
-    );
+        ; seq++
+    ) {
+        size = 2 * size + 1;
+    }
 
     while (size - 1 != x) {
         size = (size - 1) >> 1;
@@ -1239,23 +1356,25 @@ void Searcher::check_need_restart()
         }
     }
 
+    assert(params.rest_type != Restart::glue_geom);
     if (params.rest_type == Restart::glue) {
+        check_blocking_restart();
         if (hist.glueHist.isvalid()
-            && conf.local_glue_multiplier * hist.glueHist.avg() > hist.glueHistLT.avg()
+            && conf.local_glue_multiplier * hist.glueHist.avg() > hist.glueHistLTLimited.avg()
         ) {
             params.needToStopSearch = true;
         }
     }
-    if ((conf.restartType == Restart::glue_geom
-        || conf.restartType == Restart::geom
-        || conf.restartType == Restart::luby)
+    if ((params.rest_type == Restart::geom ||
+        params.rest_type == Restart::luby ||
+        (conf.broken_glue_restart && conf.restartType == Restart::glue_geom))
         && (int64_t)params.conflictsDoneThisRestart > max_confl_this_phase
     ) {
         params.needToStopSearch = true;
     }
 
     //Conflict limit reached?
-    if (params.conflictsDoneThisRestart > params.conflictsToDo) {
+    if (params.conflictsDoneThisRestart > params.max_confl_to_do) {
         if (conf.verbosity >= 3) {
             cout
             << "c Over limit of conflicts for this restart"
@@ -1265,15 +1384,13 @@ void Searcher::check_need_restart()
     }
 }
 
+template<bool update_bogoprops>
 void Searcher::add_otf_subsume_long_clauses()
 {
     //Hande long OTF subsumption
     for(size_t i = 0; i < otf_subsuming_long_cls.size(); i++) {
         const ClOffset offset = otf_subsuming_long_cls[i];
         Clause& cl = *solver->cl_alloc.ptr(offset);
-        #ifdef STATS_NEEDED
-        cl.stats.conflicts_made += conf.rewardShortenedClauseWithConfl;
-        #endif
 
         //Find the l_Undef
         size_t at = std::numeric_limits<size_t>::max();
@@ -1295,15 +1412,20 @@ void Searcher::add_otf_subsume_long_clauses()
                 break;
             }
         }
-        assert(cl.size() > 3);
+        assert(cl.size() > 2);
 
         if (at == 0) {
             //If none found, we have a propagating clause_t
-            enqueue(cl[0], decisionLevel() == 0 ? PropBy() : PropBy(offset));
+            enqueue<update_bogoprops>(cl[0], decisionLevel() == 0 ? PropBy() : PropBy(offset));
 
             //Drat
             if (decisionLevel() == 0) {
-                *drat << cl[0] << fin;
+                *drat << add << cl[0]
+                #ifdef STATS_NEEDED
+                << cl.stats.ID
+                << sumConflicts
+                #endif
+                << fin;
             }
         } else {
             //We have a non-propagating clause
@@ -1317,6 +1439,7 @@ void Searcher::add_otf_subsume_long_clauses()
     otf_subsuming_long_cls.clear();
 }
 
+template<bool update_bogoprops>
 void Searcher::add_otf_subsume_implicit_clause()
 {
     //Handle implicit OTF subsumption
@@ -1356,22 +1479,24 @@ void Searcher::add_otf_subsume_implicit_clause()
 
             //if decision level is non-zero, we have to be more careful
             if (decisionLevel() != 0) {
-                if (it->size == 2) {
-                    by = PropBy(it->lits[1], true);
-                } else {
-                    by = PropBy(it->lits[1], it->lits[2], true);
-                }
+                assert(it->size == 2);
+                by = PropBy(it->lits[1], true);
             }
 
             //Enqueue this literal, finally
-            enqueue(
+            enqueue<update_bogoprops>(
                 it->lits[0]
                 , by
             );
 
             //Drat
             if (decisionLevel() == 0) {
-                *drat << it->lits[0] << fin;
+                *drat << add << it->lits[0]
+                #ifdef STATS_NEEDED
+                << clauseID++
+                << sumConflicts
+                #endif
+                << fin;
             }
         } else {
             //We have a non-propagating clause
@@ -1384,40 +1509,47 @@ void Searcher::add_otf_subsume_implicit_clause()
             if (it->size == 2) {
                 solver->datasync->signalNewBinClause(it->lits);
                 solver->attach_bin_clause(it->lits[0], it->lits[1], true);
-            } else {
-                solver->attach_tri_clause(it->lits[0], it->lits[1], it->lits[2], true);
             }
         }
     }
     otf_subsuming_short_cls.clear();
 }
 
-void Searcher::update_history_stats(size_t backtrack_level, size_t glue)
+void Searcher::update_history_stats(size_t backtrack_level, uint32_t glue)
 {
     assert(decisionLevel() > 0);
 
     //short-term averages
     hist.branchDepthHist.push(decisionLevel());
+    #ifdef STATS_NEEDED
+    hist.backtrackLevelHist.push(backtrack_level);
+    hist.branchDepthHistQueue.push(decisionLevel());
+    hist.numResolutionsHist.push(antec_data.num());
+    #endif
     hist.branchDepthDeltaHist.push(decisionLevel() - backtrack_level);
     hist.conflSizeHist.push(learnt_clause.size());
-    hist.numResolutionsHist.push(antec_data.num());
     hist.trailDepthDeltaHist.push(trail.size() - trail_lim[backtrack_level]);
 
     //long-term averages
-    hist.decisionLevelHistLT.push(decisionLevel());
-    hist.backtrackLevelHistLT.push(backtrack_level);
-
+    #ifdef STATS_NEEDED
     hist.vsidsVarsAvgLT.push(antec_data.vsids_vars.avg());
     hist.numResolutionsHistLT.push(antec_data.num());
+    hist.decisionLevelHistLT.push(decisionLevel());
+    const uint32_t overlap = antec_data.sum_size()-(antec_data.num()-1)-learnt_clause.size();
+    hist.antec_data_sum_sizeHistLT.push(antec_data.sum_size());
+    hist.overlapHistLT.push(overlap);
+    #endif
+    hist.backtrackLevelHistLT.push(backtrack_level);
     hist.conflSizeHistLT.push(learnt_clause.size());
-
     hist.trailDepthHistLT.push(trail.size());
     if (params.rest_type == Restart::glue) {
-        hist.glueHistLT.push(glue);
-        hist.glueHist.push(glue);
+        hist.glueHistLTLimited.push(std::min<size_t>(glue, 50));
     }
+    hist.glueHistLTAll.push(glue);
+    hist.glueHist.push(glue);
 }
 
+template<bool update_bogoprops>
 void Searcher::attach_and_enqueue_learnt_clause(Clause* cl, bool enq)
 {
     switch (learnt_clause.size()) {
@@ -1446,23 +1578,12 @@ void Searcher::attach_and_enqueue_learnt_clause(Clause* cl, bool enq)
             #endif
             break;
 
-        case 3:
-            //3-long learnt
-            stats.learntTris++;
-            solver->attach_tri_clause(learnt_clause[0], learnt_clause[1], learnt_clause[2], true, enq);
-            if (enq) enqueue(learnt_clause[0], PropBy(learnt_clause[1], learnt_clause[2], true));
-
-            #ifdef STATS_NEEDED
-            propStats.propsTriRed++;
-            #endif
-            break;
-
         default:
             //Long learnt
             stats.learntLongs++;
             solver->attachClause(*cl, enq);
             if (enq) enqueue(learnt_clause[0], PropBy(cl_alloc.get_offset(cl)));
-            bumpClauseAct(cl);
+            bump_cl_act<update_bogoprops>(cl);
 
             #ifdef STATS_NEEDED
             cl->stats.antec_data = antec_data;
@@ -1500,19 +1621,54 @@ void Searcher::print_learnt_clause() const
 #ifdef STATS_NEEDED
 void Searcher::dump_sql_clause_data(
     const uint32_t glue
-    , const uint32_t backtrack_level
+    , const uint32_t old_decision_level
 ) {
+    vector<double> last_dec_var_act;
+    for(int i = (int)decisionLevel()-1; i >= 0; i--) {
+        uint32_t at = trail_lim[i];
+        if (at < trail.size()) {
+            uint32_t v = trail[at].var();
+            double act_rel = var_act_vsids[v]/var_inc_vsids;
+            last_dec_var_act.push_back(act_rel);
+            if (last_dec_var_act.size() >= 2)
+                break;
+        }
+    }
+
+    while(last_dec_var_act.size() < 2)
+        last_dec_var_act.push_back(0);
+
+    vector<double> first_dec_var_act;
+    for(size_t i = 0; i < decisionLevel(); i++) {
+        uint32_t at = trail_lim[i];
+        if (at < trail.size()) {
+            uint32_t v = trail[at].var();
+            double act_rel = var_act_vsids[v]/var_inc_vsids;
+            first_dec_var_act.push_back(act_rel);
+            if (first_dec_var_act.size() >= 2)
+                break;
+        }
+    }
+
+    while(first_dec_var_act.size() < 2)
+        first_dec_var_act.push_back(0);
+
     solver->sqlStats->dump_clause_stats(
         solver
         , clauseID
         , glue
-        , backtrack_level
+        , decisionLevel()
         , learnt_clause.size()
         , antec_data
-        , decisionLevel()
+        , old_decision_level
         , trail.size()
         , params.conflictsDoneThisRestart
+        , restart_type_to_short_string(params.rest_type)
         , hist
+        , last_dec_var_act[0]
+        , last_dec_var_act[1]
+        , first_dec_var_act[0]
+        , first_dec_var_act[1]
     );
 }
 #endif
@@ -1521,208 +1677,119 @@ Clause* Searcher::handle_last_confl_otf_subsumption(
     Clause* cl
     , const uint32_t glue
     , const uint32_t
-    backtrack_level
+    #ifdef STATS_NEEDED
+    old_decision_level
+    #endif
 ) {
-    //Cannot make a non-implicit into an implicit
-    if (learnt_clause.size() <= 3) {
-        *drat << learnt_clause << fin;
-        return NULL;
+    if (learnt_clause.size() <= 2 ||
+        cl == NULL ||
+        cl->gauss_temp_cl() ||
+        !conf.doOTFSubsume
+    ) {
+        //Cannot make a non-implicit into an implicit
+        if (learnt_clause.size() <= 2) {
+            *drat << add << learnt_clause
+            #ifdef STATS_NEEDED
+            << clauseID
+            << sumConflicts
+            #endif
+            << fin;
+            cl = NULL;
+        } else {
+            cl = cl_alloc.Clause_new(learnt_clause
+            , sumConflicts
+            #ifdef STATS_NEEDED
+            , clauseID
+            #endif
+            );
+            cl->makeRed(glue);
+            ClOffset offset = cl_alloc.get_offset(cl);
+            unsigned which_arr = 2;
+
+            if (glue <= conf.glue_put_lev0_if_below_or_eq) {
+                which_arr = 0;
+            } else if (
+                glue <= conf.glue_put_lev1_if_below_or_eq
+                && conf.glue_put_lev1_if_below_or_eq != 0
+            ) {
+                which_arr = 1;
+            } else {
+                which_arr = 2;
+            }
+
+            if (which_arr == 0) {
+                stats.red_cl_in_which0++;
+            }
+
+            /*if (conf.guess_cl_effectiveness) {
+                unsigned lower_it = guess_clause_array(cl->stats, decisionLevel());
+                if (lower_it) {
+                    stats.guess_different++;
+                    cl->stats.ttl = 1;
+                }
+            }*/
+
+            cl->stats.which_red_array = which_arr;
+            solver->longRedCls[cl->stats.which_red_array].push_back(offset);
+            *drat << add << *cl
+            #ifdef STATS_NEEDED
+            << sumConflicts
+            #endif
+            << fin;
+        }
+    } else {
+        //On-the-fly subsumption
+        assert(cl->size() > 2);
+        *(solver->drat) << deldelay << *cl << fin;
+        solver->detachClause(*cl, false);
+
+        //Shrink clause
+        assert(cl->size() > learnt_clause.size());
+        for (uint32_t i = 0; i < learnt_clause.size(); i++) {
+            (*cl)[i] = learnt_clause[i];
+        }
+        cl->resize(learnt_clause.size());
+        assert(cl->size() == learnt_clause.size());
+
+        //Update stats
+        if (cl->red() && cl->stats.glue > glue) {
+            cl->stats.glue = glue;
+        }
+        #ifdef STATS_NEEDED
+        cl->stats.ID = clauseID;
+        #endif
+
+        *(solver->drat) << add << *cl
+        #ifdef STATS_NEEDED
+        << solver->sumConflicts
+        #endif
+         << fin << findelay;
     }
 
-    //No on-the-fly subsumption
-    if (cl == NULL || cl->gauss_temp_cl()) {
-        cl = cl_alloc.Clause_new(learnt_clause
-        #ifdef STATS_NEEDED
-        , sumConflicts()
-        , clauseID
-        #endif
-        );
-        cl->makeRed(glue);
-        ClOffset offset = cl_alloc.get_offset(cl);
-        unsigned which_arr;
-        if (cl->stats.glue <= conf.glue_must_keep_clause_if_below_or_eq) {
-            which_arr = 0;
-        } else {
-            which_arr = 1;
-        }
-        if (which_arr == 0) {
-            stats.red_cl_in_which0++;
-        }
-        switch(conf.guess_cl_effectiveness) {
-            case 0:
-                break;
-
-            case 1: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.2);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 2: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.3);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 2;
-                }
-                break;
-            }
-
-            case 3: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.3);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    which_arr = 0;
-                }
-                break;
-            }
-
-            case 4: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 6.0, 0.3);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 5: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 8.5, 0.3);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 6: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.3, -0.08);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 7: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.3, 0, true);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 8: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.15, -0.08, true);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 2;
-                }
-                break;
-            }
-
-            case 9: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.2);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 2;
-                }
-                break;
-            }
-
-            case 10: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.2, 0, true);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            case 11: {
-                unsigned guess = guess_clause_array(cl->stats.glue, backtrack_level, 7.5, 0.1, 0, true);
-                if (guess < which_arr) {
-                    stats.guess_different++;
-                }
-                if (guess == 0) {
-                    cl->stats.ttl = 1;
-                }
-                break;
-            }
-
-            default: {
-                cout << "ERROR: no such guess value: " << conf.guess_cl_effectiveness << endl;
-                exit(-1);
+    #ifdef STATS_NEEDED
+    if (solver->sqlStats
+        && drat
+        && conf.dump_individual_restarts_and_clauses
+    ) {
+        if (dump_this_many_cldata_in_stream <= 0) {
+            double myrnd = mtrand.randDblExc();
+            if (myrnd <= conf.dump_individual_cldata_ratio) {
+                dump_this_many_cldata_in_stream = 5;
             }
         }
-        cl->stats.which_red_array = which_arr;
-        solver->longRedCls[cl->stats.which_red_array].push_back(offset);
-        *drat << *cl << fin;
 
-        #ifdef STATS_NEEDED
-        if (solver->sqlStats
-            && drat
-            && conf.dump_individual_restarts_and_clauses
-            && learnt_clause.size() > 3
-        ) {
+        if (dump_this_many_cldata_in_stream >= 0) {
+            if (cl) {
+                cl->stats.dump_number = 0;
+            }
+            dump_this_many_cldata_in_stream--;
             dump_sql_clause_data(
                 glue
-                , backtrack_level
+                , old_decision_level
             );
         }
-        #endif
-        clauseID++;
-
-        return cl;
     }
-
-    assert(cl->size() > 3);
-    *drat << learnt_clause << fin;
-    if (conf.verbosity >= 6) {
-        cout
-        << "Detaching OTF subsumed (LAST) clause:"
-        << *cl
-        << endl;
-    }
-    solver->detachClause(*cl);
-    assert(cl->size() > learnt_clause.size());
-
-    //Shrink clause
-    for (uint32_t i = 0; i < learnt_clause.size(); i++) {
-        (*cl)[i] = learnt_clause[i];
-    }
-    cl->resize(learnt_clause.size());
-    assert(cl->size() == learnt_clause.size());
-
-    //Update stats
-    if (cl->red() && cl->stats.glue > glue) {
-        cl->stats.glue = glue;
-    }
-    #ifdef STATS_NEEDED
-    cl->stats.conflicts_made += conf.rewardShortenedClauseWithConfl;
+    clauseID++;
     #endif
 
     return cl;
@@ -1731,49 +1798,74 @@ Clause* Searcher::handle_last_confl_otf_subsumption(
 template<bool update_bogoprops>
 bool Searcher::handle_conflict(const PropBy confl)
 {
-    uint32_t backtrack_level;
-    uint32_t glue;
-    antec_data.clear();
     stats.conflStats.numConflicts++;
+    sumConflicts++;
+    if (sumConflicts == 100000 && //TODO magic constant
+        longRedCls[0].size() < 100 &&
+        //so that in case of some "standard-minisat behavriour" config
+        //we don't override it
+        conf.glue_put_lev0_if_below_or_eq != 0
+    ) {
+        conf.glue_put_lev0_if_below_or_eq += 2; //TODO magic constant
+    }
+
+    /*if (sumConflicts > 50000) {
+        DISTANCE = 0;
+    }
+    if (VSIDS && DISTANCE) {
+        collectFirstUIP(confl);
+    }*/
+
     params.conflictsDoneThisRestart++;
-    if (conf.doPrintConflDot)
-        create_graphviz_confl_graph(confl);
 
     if (decisionLevel() == 0)
         return false;
 
-    Clause* cl = analyze_conflict<update_bogoprops>(
+    uint32_t backtrack_level;
+    uint32_t glue;
+    Clause* subsumed_cl = analyze_conflict<update_bogoprops>(
         confl
         , backtrack_level  //return backtrack level here
         , glue             //return glue here
     );
     print_learnt_clause();
 
-
+    //Add decision-based clause in case it's short
     decision_clause.clear();
     if (!update_bogoprops
-        && learnt_clause.size() > 50 //TODO MAGIC parameter
-        && decisionLevel() <= 9
+        && conf.do_decision_based_cl
+        && learnt_clause.size() > conf.decision_based_cl_min_learned_size
+        && decisionLevel() <= conf.decision_based_cl_max_levels
         && decisionLevel() >= 2
     ) {
         for(int i = (int)trail_lim.size()-1; i >= 0; i--) {
-            decision_clause.push_back(~trail[trail_lim[i]]);
+            Lit l = ~trail[trail_lim[i]];
+            if (!seen[l.toInt()]) {
+                decision_clause.push_back(l);
+                seen[l.toInt()] = 1;
+            }
+        }
+        for(Lit l: decision_clause) {
+            seen[l.toInt()] = 0;
         }
     }
 
     if (!update_bogoprops) {
         update_history_stats(backtrack_level, glue);
     }
-    cancelUntil(backtrack_level);
+    uint32_t old_decision_level = decisionLevel();
+    cancelUntil<true, update_bogoprops>(backtrack_level);
 
-    add_otf_subsume_long_clauses();
-    add_otf_subsume_implicit_clause();
+    add_otf_subsume_long_clauses<update_bogoprops>();
+    add_otf_subsume_implicit_clause<update_bogoprops>();
     print_learning_debug_info();
     assert(value(learnt_clause[0]) == l_Undef);
     glue = std::min<uint32_t>(glue, std::numeric_limits<uint32_t>::max());
-    cl = handle_last_confl_otf_subsumption(cl, glue, backtrack_level);
-    assert(learnt_clause.size() <= 3 || cl != NULL);
-    attach_and_enqueue_learnt_clause(cl);
+    Clause* cl = handle_last_confl_otf_subsumption(subsumed_cl, glue, old_decision_level);
+    assert(learnt_clause.size() <= 2 || cl != NULL);
+    attach_and_enqueue_learnt_clause<update_bogoprops>(cl);
+
+    //Add decision-based clause
     if (!update_bogoprops
         && decision_clause.size() > 0
     ) {
@@ -1788,12 +1880,14 @@ bool Searcher::handle_conflict(const PropBy confl)
         std::swap(decision_clause[0], decision_clause[i]);
         learnt_clause = decision_clause;
         cl = handle_last_confl_otf_subsumption(NULL, learnt_clause.size(), decisionLevel());
-        attach_and_enqueue_learnt_clause(cl, false);
+        attach_and_enqueue_learnt_clause<update_bogoprops>(cl, false);
     }
 
     if (!update_bogoprops) {
-        varDecayActivity();
-        decayClauseAct();
+        if (VSIDS) {
+            varDecayActivity();
+        }
+        decayClauseAct<update_bogoprops>();
     }
 
     return true;
@@ -1816,79 +1910,54 @@ void Searcher::resetStats()
     lastCleanZeroDepthAssigns = trail.size();
 }
 
-lbool Searcher::burst_search()
+void Searcher::check_calc_features()
 {
-    const double myTime = cpuTime();
-    const size_t numUnitsUntilNow = stats.learntUnits;
-    const size_t numBinsUntilNow = stats.learntBins;
-
-    //Save old config
-    const double backup_rand = conf.random_var_freq;
-    const PolarityMode backup_polar_mode = conf.polarity_mode;
-    Restart backup_restart_type = params.rest_type;
-    double backup_var_inc = var_inc;
-    double backup_var_decay = var_decay;
-
-    //Set burst config
-    conf.random_var_freq = 1;
-    conf.polarity_mode = PolarityMode::polarmode_rnd;
-
-    //Do burst
-    params.clear();
-    params.conflictsToDo = conf.burst_search_len;
-    params.rest_type = Restart::never;
-    lbool status = search<true>();
-
-    //Restore config
-    conf.random_var_freq = backup_rand;
-    conf.polarity_mode = backup_polar_mode;
-    params.rest_type = backup_restart_type;
-    assert(var_inc == backup_var_inc);
-    assert(var_decay == backup_var_decay);
-
-    //Print what has happened
-    const double time_used = cpuTime() - myTime;
-    if (conf.verbosity >= 2) {
-        cout
-        << "c "
-        << conf.burst_search_len << "-long burst search "
-        << " learnt units:" << (stats.learntUnits - numUnitsUntilNow)
-        << " learnt bins: " << (stats.learntBins - numBinsUntilNow)
-        << solver->conf.print_times(time_used)
-        << endl;
+    if (last_feature_calc_confl == 0 || (last_feature_calc_confl + 100000) < sumConflicts) {
+        last_feature_calc_confl = sumConflicts+1;
+        if (nVars() > 2
+            && longIrredCls.size() > 1
+            && (binTri.irredBins + binTri.redBins) > 1
+        ) {
+            solver->last_solve_feature = solver->calculate_features();
+        }
     }
-
-    return status;
 }
 
-void Searcher::print_restart_header() const
+void Searcher::print_restart_header()
 {
-    cout
-    << "c"
-    << " " << std::setw(5) << "rest"
-    << " " << std::setw(5) << "conf"
-    << " " << std::setw(5) << "freevar"
-    << " " << std::setw(5) << "IrrL"
-    << " " << std::setw(5) << "IrrT"
-    << " " << std::setw(5) << "IrrB"
-    << " " << std::setw(7) << "l/longC"
-    << " " << std::setw(7) << "l/allC";
+    //Print restart output header
+    if ((lastRestartPrintHeader == 0 || (lastRestartPrintHeader + 1600000) < sumConflicts)
+        && conf.verbosity
+    ) {
+        cout
+        << "c"
+        << " " << std::setw(6) << "type"
+        << " " << std::setw(5) << "VSIDS"
+        << " " << std::setw(5) << "rest"
+        << " " << std::setw(5) << "conf"
+        << " " << std::setw(5) << "freevar"
+        << " " << std::setw(5) << "IrrL"
+        << " " << std::setw(5) << "IrrB"
+        << " " << std::setw(7) << "l/longC"
+        << " " << std::setw(7) << "l/allC";
 
-    for(size_t i = 0; i < longRedCls.size(); i++) {
-        cout << " " << std::setw(4) << "RedL" << i;
+        for(size_t i = 0; i < longRedCls.size(); i++) {
+            cout << " " << std::setw(4) << "RedL" << i;
+        }
+
+        cout
+        << " " << std::setw(5) << "RedB"
+        << " " << std::setw(7) << "l/longC"
+        << " " << std::setw(7) << "l/allC"
+        << endl;
+        lastRestartPrintHeader = sumConflicts;
     }
-
-    cout << " " << std::setw(5) << "RedT"
-    << " " << std::setw(5) << "RedB"
-    << " " << std::setw(7) << "l/longC"
-    << " " << std::setw(7) << "l/allC"
-    << endl;
 }
 
 void Searcher::print_restart_stat_line() const
 {
-    printBaseStats();
-    if (conf.print_all_stats) {
+    print_restart_stats_base();
+    if (conf.print_full_restart_stat) {
         solver->print_clause_stats();
         hist.print();
     } else {
@@ -1898,24 +1967,20 @@ void Searcher::print_restart_stat_line() const
     cout << endl;
 }
 
-void Searcher::printBaseStats() const
+void Searcher::print_restart_stats_base() const
 {
-    cout
-    << "c"
-    //<< omp_get_thread_num()
-    << " " << std::setw(5) << sumRestarts();
+    cout << "c"
+         << " " << std::setw(6) << restart_type_to_short_string(params.rest_type);
+    cout << " " << std::setw(5) << (int)VSIDS;
+    cout << " " << std::setw(5) << sumRestarts();
 
-    if (sumConflicts() >  20000) {
-        cout
-        << " " << std::setw(4) << sumConflicts()/1000 << "K";
+    if (sumConflicts >  20000) {
+        cout << " " << std::setw(4) << sumConflicts/1000 << "K";
     } else {
-        cout
-        << " " << std::setw(5) << sumConflicts();
+        cout << " " << std::setw(5) << sumConflicts;
     }
 
-    cout
-    << " " << std::setw(7) << solver->get_num_free_vars()
-    ;
+    cout << " " << std::setw(7) << solver->get_num_free_vars();
 }
 
 struct MyInvSorter {
@@ -1953,7 +2018,8 @@ inline void Searcher::dump_restart_sql()
     thisStats.clauseID_at_end_exclusive = clauseID;
 
     solver->sqlStats->restart(
-        thisPropStats
+        restart_type_to_short_string(params.rest_type)
+        , thisPropStats
         , thisStats
         , solver
         , this
@@ -1967,49 +2033,46 @@ inline void Searcher::dump_restart_sql()
 void Searcher::print_restart_stat()
 {
     //Print restart stat
-    if (conf.verbosity >= 2
+    if (conf.verbosity
+        && !conf.print_all_restarts
         && ((lastRestartPrint + conf.print_restart_line_every_n_confl)
-          < sumConflicts())
+          < sumConflicts)
     ) {
-        //Print restart output header
-        if (lastRestartPrintHeader == 0
-            ||(lastRestartPrintHeader + 20000) < sumConflicts()
-        ) {
-            print_restart_header();
-            lastRestartPrintHeader = sumConflicts();
-        }
         print_restart_stat_line();
-        lastRestartPrint = sumConflicts();
+        lastRestartPrint = sumConflicts;
     }
 }
 
 void Searcher::reset_temp_cl_num()
 {
-    conf.cur_max_temp_red_cls = conf.max_temporary_learnt_clauses;
+    cur_max_temp_red_lev2_cls = conf.max_temp_lev2_learnt_clauses;
 }
 
 void Searcher::reduce_db_if_needed()
 {
-    if (longRedCls[1].size() <= conf.cur_max_temp_red_cls) {
-        return;
+    if (conf.every_lev1_reduce != 0
+        && sumConflicts >= next_lev1_reduce
+    ) {
+        if (solver->sqlStats) {
+            solver->reduceDB->dump_sql_cl_data();
+        }
+        solver->reduceDB->handle_lev1();
+        next_lev1_reduce = sumConflicts + conf.every_lev1_reduce;
     }
 
-    if (conf.verbosity >= 3) {
-        cout
-        << "c "
-        << " cleaning"
-        << " numConflicts : " << stats.conflStats.numConflicts
-        << " SumConfl: " << sumConflicts()
-        << " max_confl_per_search_solve_call:" << max_confl_per_search_solve_call
-        << " Trail size: " << trail.size() << endl;
+    if (conf.every_lev2_reduce != 0) {
+        if (sumConflicts >= next_lev2_reduce) {
+            solver->reduceDB->handle_lev2();
+            cl_alloc.consolidate(solver);
+            next_lev2_reduce = sumConflicts + conf.every_lev2_reduce;
+        }
+    } else {
+        if (longRedCls[2].size() > cur_max_temp_red_lev2_cls) {
+            solver->reduceDB->handle_lev2();
+            cur_max_temp_red_lev2_cls *= conf.inc_max_temp_lev2_red_cls;
+            cl_alloc.consolidate(solver);
+        }
     }
-    solver->reduceDB->reduce_db_and_update_reset_stats();
-    if (conf.verbosity >= 3) {
-        watches.print_stat();
-    }
-
-    cl_alloc.consolidate(solver);
-    conf.cur_max_temp_red_cls *= conf.inc_max_temp_red_cls;
 }
 
 bool Searcher::clean_clauses_if_needed()
@@ -2023,16 +2086,20 @@ bool Searcher::clean_clauses_if_needed()
     const size_t newZeroDepthAss = trail.size() - lastCleanZeroDepthAssigns;
     if (newZeroDepthAss > 0
         && simpDB_props < 0
+        && newZeroDepthAss > ((double)nVars()*0.05)
     ) {
         if (conf.verbosity >= 2) {
-            cout << "c newZeroDepthAss : " << newZeroDepthAss  << endl;
+            cout << "c newZeroDepthAss : " << newZeroDepthAss
+            << " -- "
+            << (double)newZeroDepthAss/(double)nVars()*100.0
+            << " % of active vars"
+            << endl;
         }
         lastCleanZeroDepthAssigns = trail.size();
         solver->clauseCleaner->remove_and_clean_all();
 
         cl_alloc.consolidate(solver);
         rebuildOrderHeap(); //TODO only filter is needed!
-        sortWatched();
         simpDB_props = (litStats.redLits + litStats.irredLits)<<5;
     }
 
@@ -2041,52 +2108,32 @@ bool Searcher::clean_clauses_if_needed()
 
 void Searcher::rebuildOrderHeap()
 {
-    vec<uint32_t> vs;
+    vector<uint32_t> vs;
     for (uint32_t v = 0; v < nVars(); v++) {
-        if (varData[v].removed == Removed::none
-            && value(v) == l_Undef
+        if (varData[v].removed != Removed::none
+            //NOTE: the level==0 check is needed because SLS calls this
+            //when there is a solution already, but we should only skip
+            //level 0 assignements
+            || (value(v) != l_Undef && varData[v].level == 0)
         ) {
-            vs.push(v);
+            continue;
+        } else {
+            vs.push_back(v);
         }
     }
-    order_heap_glue.build(vs);
+    order_heap_vsids.build(vs);
+    order_heap_maple.build(vs);
 }
 
-//NOTE: as per AWS check, doing this in Searcher::solve() loop is _detrimental_
-//      to performance. Solved 2 less in 3600s of SATRace'14
-lbool Searcher::perform_scc_and_varreplace_if_needed()
+inline void Searcher::dump_search_loop_stats(double myTime)
 {
-    if (conf.doFindAndReplaceEqLits
-            && (solver->binTri.numNewBinsSinceSCC
-                > ((double)solver->get_num_free_vars()*conf.sccFindPercent))
-    ) {
-        if (conf.verbosity >= 1) {
-            cout
-            << "c new bins since last SCC: "
-            << std::setw(2)
-            << solver->binTri.numNewBinsSinceSCC
-            << " free vars %:"
-            << std::fixed << std::setprecision(2) << std::setw(4)
-            << stats_line_percent(solver->binTri.numNewBinsSinceSCC, solver->get_num_free_vars())
-            << endl;
-        }
+    if (solver->sqlStats)
+        check_calc_features();
 
-        solver->clauseCleaner->remove_and_clean_all();
-
-        lastCleanZeroDepthAssigns = trail.size();
-        if (!solver->varReplacer->replace_if_enough_is_found(std::floor((double)solver->get_num_free_vars()*0.001))) {
-            return l_False;
-        }
-        #ifdef SLOW_DEBUG
-        assert(solver->check_order_heap_sanity());
-        #endif
-    }
-
-    return l_Undef;
-}
-
-inline void Searcher::dump_search_loop_stats()
-{
+    print_restart_header();
+    dump_search_sql(myTime);
+    if (conf.verbosity && conf.print_all_restarts)
+        print_restart_stat_line();
     #ifdef STATS_NEEDED
     if (sqlStats
         && conf.dump_individual_restarts_and_clauses
@@ -2100,10 +2147,8 @@ bool Searcher::must_abort(const lbool status) {
     if (status != l_Undef) {
         if (conf.verbosity >= 6) {
             cout
-            << "c Returned status of search() is non-l_Undef at loop "
-            << loop_num
-            << " confl:"
-            << sumConflicts()
+            << "c Returned status of search() is non-l_Undef at confl:"
+            << sumConflicts
             << endl;
         }
         return true;
@@ -2139,22 +2184,12 @@ bool Searcher::must_abort(const lbool status) {
     return false;
 }
 
-void Searcher::print_search_loop_num()
-{
-    if (conf.verbosity >= 6) {
-        cout
-        << "c search loop " << loop_num
-        << endl;
-    }
-}
-
 lbool Searcher::solve(
-    const uint64_t _maxConfls
-    , const unsigned upper_level_iteration_num
+    const uint64_t _max_confls
 ) {
     assert(ok);
     assert(qhead == trail.size());
-    max_confl_per_search_solve_call = _maxConfls;
+    max_confl_per_search_solve_call = _max_confls;
     num_search_called++;
     #ifdef SLOW_DEBUG
     //When asking for a lot of simple soluitons, search() gets called a lot
@@ -2167,71 +2202,125 @@ lbool Searcher::solve(
         << endl;
     }
 
-    #ifdef USE_GAUSS
-    for (Gaussian* g : gauss_matrixes) {
-        if (!g->init_until_fixedpoint()) {
-            return l_False;
-        }
-    }
-    #endif
-
     resetStats();
     lbool status = l_Undef;
-    if (conf.burst_search_len > 0
-        && upper_level_iteration_num > 0
-    ) {
-        assert(solver->check_order_heap_sanity());
-        status = burst_search();
-        if (status != l_Undef)
-            goto end;
-    }
+    if (VSIDS) {
+        if (conf.restartType == Restart::geom) {
+            max_confl_phase = conf.restart_first;
+            max_confl_this_phase = conf.restart_first;
+            params.rest_type = Restart::geom;
+        }
 
-    if (conf.restartType == Restart::geom) {
-        max_confl_phase = conf.restart_first;
-        max_confl_this_phase = conf.restart_first;
-        params.rest_type = Restart::geom;
-    }
+        if (conf.restartType == Restart::glue_geom) {
+            max_confl_phase = conf.restart_first;
+            max_confl_this_phase = conf.restart_first;
+            params.rest_type = Restart::glue;
+        }
 
-    if (conf.restartType == Restart::luby) {
+        if (conf.restartType == Restart::luby) {
+            max_confl_this_phase = conf.restart_first;
+            params.rest_type = Restart::luby;
+        }
+
+        if (conf.restartType == Restart::glue) {
+            params.rest_type = Restart::glue;
+        }
+    } else {
         max_confl_this_phase = conf.restart_first;
         params.rest_type = Restart::luby;
     }
 
+    #ifdef USE_GAUSS
+    clearEnGaussMatrixes();
+    {
+        MatrixFinder finder(solver);
+        ok = finder.findMatrixes();
+        if (!ok) {
+            status = l_False;
+            goto end;
+        }
+    }
+    if (!solver->init_all_matrixes()) {
+        return l_False;
+    }
+    #endif //USE_GAUSS
+
     assert(solver->check_order_heap_sanity());
-    for(loop_num = 0
-        ; stats.conflStats.numConflicts < max_confl_per_search_solve_call
-        ; loop_num ++
+    while(stats.conflStats.numConflicts < max_confl_per_search_solve_call
+        && status == l_Undef
     ) {
         #ifdef SLOW_DEBUG
-        assert(order_heap_glue.heap_property());
         assert(solver->check_order_heap_sanity());
         #endif
 
         assert(watches.get_smudged_list().empty());
-        print_search_loop_num();
 
-        lastRestartConfl = sumConflicts();
+        lastRestartConfl = sumConflicts;
         params.clear();
-        params.conflictsToDo = max_confl_per_search_solve_call-stats.conflStats.numConflicts;
-        if (params.rest_type == Restart::glue_geom) {
-            params.rest_type = Restart::geom;
-        }
+        params.max_confl_to_do = max_confl_per_search_solve_call-stats.conflStats.numConflicts;
         status = search<false>();
+        if (status == l_Undef) {
+            adjust_phases_restarts();
+        }
 
-        if (conf.restartType == Restart::geom
-            && max_confl_this_phase <= 0
+        if (must_abort(status)) {
+            goto end;
+        }
+
+        if (status == l_Undef &&
+            solver->conf.do_distill_clauses &&
+            sumConflicts > next_distill
         ) {
+            if (!solver->distill_long_cls->distill(true, false)) {
+                status = l_False;
+                goto end;
+            }
+            next_distill = std::min<double>(sumConflicts * 0.2 + sumConflicts + 3000,
+                                    sumConflicts + 50000);
+        }
+    }
+
+    end:
+    finish_up_solve(status);
+
+    return status;
+}
+
+void Searcher::adjust_phases_restarts()
+{
+    //Haven't finished the phase. Keep rolling.
+    if (max_confl_this_phase > 0)
+        return;
+
+    //Note that all of this will be overridden by params.max_confl_to_do
+    if (!VSIDS) {
+        assert(params.rest_type == Restart::luby);
+        max_confl_this_phase = luby(2, luby_loop_num) * (double)conf.restart_first;
+        luby_loop_num++;
+    } else {
+        if (conf.verbosity >= 3) {
+            cout << "c doing VSIDS" << endl;
+        }
+        switch(conf.restartType) {
+        case Restart::never:
+        case Restart::glue:
+            assert(params.rest_type == Restart::glue);
+            //nothing special
+            break;
+        case Restart::geom:
+            assert(params.rest_type == Restart::geom);
             max_confl_phase *= conf.restart_inc;
             max_confl_this_phase = max_confl_phase;
-        }
+            break;
 
-        if (conf.restartType == Restart::luby) {
-            max_confl_this_phase = luby(conf.restart_inc*1.5, loop_num) * (double)conf.restart_first/2.0;
-        }
+        case Restart::luby:
+            max_confl_this_phase = luby(conf.restart_inc*1.5, luby_loop_num)
+                * (double)conf.restart_first/2.0;
 
-        if (conf.restartType == Restart::glue_geom
-            && max_confl_this_phase <= 0
-        ) {
+            luby_loop_num++;
+            break;
+
+        case Restart::glue_geom:
             if (params.rest_type == Restart::geom) {
                 params.rest_type = Restart::glue;
             } else {
@@ -2244,39 +2333,21 @@ lbool Searcher::solve(
                     break;
 
                 case Restart::glue:
-                    max_confl_this_phase = 2*max_confl_phase;
+                    max_confl_this_phase = conf.ratio_glue_geom *max_confl_phase;
                     break;
 
                 default:
                     release_assert(false);
             }
             if (conf.verbosity >= 3) {
-                cout << "Phase is now " << std::setw(10) << getNameOfRestartType(params.rest_type)
+                cout << "Phase is now "
+                << std::setw(10) << getNameOfRestartType(params.rest_type)
                 << " this phase size: " << max_confl_this_phase
                 << " global phase size: " << max_confl_phase << endl;
             }
-
-            //don't go into the geom phase in case we would stop it due to simplification
-            if (conf.abort_searcher_solve_on_geom_phase
-                && params.rest_type  == Restart::geom
-                && max_confl_this_phase + stats.conflStats.numConflicts  > max_confl_per_search_solve_call
-            ) {
-                if (conf.verbosity >= 2) {
-                    cout << "c Returning from Searcher::solve() due to phase change and insufficient conflicts left" << endl;
-                }
-                goto end;
-            }
-        }
-
-        if (must_abort(status)) {
-            goto end;
+            break;
         }
     }
-
-    end:
-    finish_up_solve(status);
-
-    return status;
 }
 
 void Searcher::print_solution_varreplace_status() const
@@ -2321,20 +2392,72 @@ void Searcher::finish_up_solve(const lbool status)
     print_solution_type(status);
 
     if (status == l_True) {
+        double myTime = cpuTime();
+        #ifdef SLOW_DEBUG
+        check_order_heap_sanity();
+        #endif
         model = assigns;
+
+        if (conf.need_decisions_reaching) {
+            for(size_t i = 0; i < trail_lim.size(); i++) {
+                size_t at = trail_lim[i];
+
+                //we need this due to dummy decision levels
+                //that could create a situation where new_decision_level()
+                //has been called, but then no variable needs to be decided
+                //for SAT.
+                if (at < trail.size()) {
+                    decisions_reaching_model.push_back(trail[at]);
+                }
+            }
+        }
+
+        if (conf.greedy_undef) {
+            assert(false && "Greedy undef is broken");
+            vector<uint32_t> trail_lim_vars;
+            for(size_t i = 0; i < decisionLevel(); i++) {
+                uint32_t at = trail_lim[i];
+
+                //Yes, it can be equal -- when dummy decision levels are added
+                //and a solution is found
+                if (at < trail.size()) {
+                    uint32_t v = trail[at].var();
+                    trail_lim_vars.push_back(v);
+                    //cout << "var at " << i << " of trail_lim : "<< v+1 << endl;
+                }
+            }
+            cancelUntil(0);
+            const uint32_t unset = solver->undefine(trail_lim_vars);
+
+            if (conf.verbosity) {
+                cout << "c [undef] Freed up " << unset << " var(s)"
+                << conf.print_times(cpuTime()-myTime)
+                << endl;
+            }
+            if (sqlStats) {
+                sqlStats->time_passed_min(
+                    solver
+                    , "greedy undefine"
+                    , cpuTime()-myTime
+                );
+            }
+        } else {
+            cancelUntil(0);
+        }
         print_solution_varreplace_status();
     } else if (status == l_False) {
-        if (conflict.size() == 0)
+        if (conflict.size() == 0) {
             ok = false;
+        }
+        cancelUntil(0);
     }
-    cancelUntil(0);
 
     stats.cpu_time = cpuTime() - startTime;
     if (conf.verbosity >= 4) {
         cout << "c Searcher::solve() finished"
         << " status: " << status
         << " numConflicts : " << stats.conflStats.numConflicts
-        << " SumConfl: " << sumConflicts()
+        << " SumConfl: " << sumConflicts
         << " max_confl_per_search_solve_call:" << max_confl_per_search_solve_call
         << endl;
     }
@@ -2346,7 +2469,7 @@ void Searcher::print_iteration_solving_stats()
 {
     if (conf.verbosity >= 3) {
         cout << "c ------ THIS ITERATION SOLVING STATS -------" << endl;
-        stats.print(propStats.propagations);
+        stats.print(propStats.propagations, conf.do_print_times);
         propStats.print(stats.cpu_time);
         print_stats_line("c props/decision"
             , float_div(propStats.propagations, stats.decisions)
@@ -2367,44 +2490,49 @@ Lit Searcher::pickBranchLit()
     Lit next = lit_Undef;
 
     // Random decision:
+    Heap<VarOrderLt> &order_heap = VSIDS ? order_heap_vsids : order_heap_maple;
     if (conf.random_var_freq > 0) {
         double rand = mtrand.randDblExc();
         double frq = conf.random_var_freq;
-        if (rand < frq && !order_heap_glue.empty()) {
-            const uint32_t next_var = order_heap_glue.random_element(mtrand);
+        if (rand < frq && !order_heap.empty()) {
+            const uint32_t next_var = order_heap.random_element(mtrand);
 
             if (value(next_var) == l_Undef
                 && solver->varData[next_var].removed == Removed::none
             ) {
                 stats.decisionsRand++;
-                next = Lit(next_var, !pickPolarity(next_var));
+                next = Lit(next_var, !pick_polarity(next_var));
             }
         }
     }
 
-    // Activity based decision:
     if (next == lit_Undef) {
-        uint32_t next_var = var_Undef;
-        while (next_var == var_Undef
-          || value(next_var) != l_Undef
-        ) {
+        uint32_t v = var_Undef;
+        while (v == var_Undef || value(v) != l_Undef) {
             //There is no more to branch on. Satisfying assignment found.
-            if (order_heap_glue.empty()) {
-                next_var = var_Undef;
+            if (order_heap.empty()) {
                 return lit_Undef;
             }
-            next_var = order_heap_glue.removeMin();
-        }
-        next = Lit(next_var, !pickPolarity(next_var));
-    }
 
-    //Flip polaritiy if need be
-    /*if (mtrand.randInt(50) == 1
-        && next != lit_Undef
-    ) {
-        next ^= true;
-        stats.decisionFlippedPolar++;
-    }*/
+            if (!VSIDS) {
+                uint32_t v2 = order_heap_maple[0];
+                uint32_t age = sumConflicts - varData[v2].cancelled;
+                while (age > 0) {
+                    double decay = pow(0.95, age);
+                    var_act_maple[v2] *= decay;
+                    if (order_heap_maple.inHeap(v2)) {
+                        order_heap_maple.increase(v2);
+                    }
+
+                    varData[v2].cancelled = sumConflicts;
+                    v2 = order_heap_maple[0];
+                    age = sumConflicts - varData[v2].cancelled;
+                }
+            }
+            v = order_heap.removeMin();
+        }
+        next = Lit(v, !pick_polarity(v));
+    }
 
     //No vars in heap: solution found
     #ifdef SLOW_DEBUG
@@ -2415,11 +2543,11 @@ Lit Searcher::pickBranchLit()
     return next;
 }
 
-void Searcher::cache_based_more_minim(vector<Lit>& cl)
+void Searcher::cache_based_morem_minim(vector<Lit>& cl)
 {
     int64_t limit = more_red_minim_limit_cache_actual;
     const size_t first_n_lits_of_cl =
-        std::min<size_t>(conf.max_num_lits_more_red_min, cl.size());
+        std::min<size_t>(conf.max_num_lits_more_more_red_min, cl.size());
     for (size_t at_lit = 0; at_lit < first_n_lits_of_cl; at_lit++) {
         Lit lit = cl[at_lit];
 
@@ -2444,11 +2572,11 @@ void Searcher::cache_based_more_minim(vector<Lit>& cl)
     }
 }
 
-void Searcher::binary_based_more_minim(vector<Lit>& cl)
+void Searcher::binary_based_morem_minim(vector<Lit>& cl)
 {
     int64_t limit  = more_red_minim_limit_binary_actual;
     const size_t first_n_lits_of_cl =
-        std::min<size_t>(conf.max_num_lits_more_red_min, cl.size());
+        std::min<size_t>(conf.max_num_lits_more_more_red_min, cl.size());
     for (size_t at_lit = 0; at_lit < first_n_lits_of_cl; at_lit++) {
         Lit lit = cl[at_lit];
         //Already removed this literal
@@ -2469,31 +2597,15 @@ void Searcher::binary_based_more_minim(vector<Lit>& cl)
                 }
                 continue;
             }
-
-            if (i->isTri()) {
-                if (seen[i->lit3().toInt()]) {
-                    if (seen[(~i->lit2()).toInt()]) {
-                        stats.binTriShrinkedClause++;
-                        seen[(~i->lit2()).toInt()] = 0;
-                    }
-                }
-                if (seen[i->lit2().toInt()]) {
-                    if (seen[(~i->lit3()).toInt()]) {
-                        stats.binTriShrinkedClause++;
-                        seen[(~i->lit3()).toInt()] = 0;
-                    }
-                }
-                continue;
-            }
             break;
         }
     }
 }
 
-void Searcher::minimise_redundant_more(vector<Lit>& cl)
+void Searcher::minimise_redundant_more_more(vector<Lit>& cl)
 {
-    /*if (conf.doStamp&& conf.more_otf_shrink_with_stamp) {
-        stamp_based_more_minim(learnt_clause);
+    /*if (conf.doStamp&& conf.more_more_with_stamp) {
+        stamp_based_morem_minim(learnt_clause);
     }*/
 
     stats.furtherShrinkAttempt++;
@@ -2501,11 +2613,11 @@ void Searcher::minimise_redundant_more(vector<Lit>& cl)
         seen[lit.toInt()] = 1;
     }
 
-    if (conf.doCache && conf.more_otf_shrink_with_cache) {
-        cache_based_more_minim(cl);
+    if (conf.doCache && conf.more_more_with_cache) {
+        cache_based_morem_minim(cl);
     }
 
-    binary_based_more_minim(cl);
+    binary_based_morem_minim(cl);
 
     //Finally, remove the literals that have seen[literal] = 0
     //Here, we can count do stats, etc.
@@ -2529,7 +2641,7 @@ void Searcher::minimise_redundant_more(vector<Lit>& cl)
     cl.resize(cl.size() - (i-j));
 }
 
-void Searcher::stamp_based_more_minim(vector<Lit>& cl)
+void Searcher::stamp_based_morem_minim(vector<Lit>& cl)
 {
     //Stamp-based minimization
     stats.stampShrinkAttempt++;
@@ -2571,11 +2683,6 @@ void Searcher::stamp_based_more_minim(vector<Lit>& cl)
 bool Searcher::VarFilter::operator()(uint32_t var) const
 {
     return (cc->value(var) == l_Undef && solver->varData[var].removed == Removed::none);
-}
-
-uint64_t Searcher::sumConflicts() const
-{
-    return solver->sumSearchStats.conflStats.numConflicts + stats.conflStats.numConflicts;
 }
 
 uint64_t Searcher::sumRestarts() const
@@ -2622,6 +2729,155 @@ size_t Searcher::hyper_bin_res_all(const bool check_for_set_values)
 
     return added;
 }
+
+#ifdef USE_GAUSS
+llbool Searcher::Gauss_elimination()
+{
+    if (decisionLevel() > solver->conf.gaussconf.decision_until ||
+        gqueuedata.size() == 0
+    ) {
+        return l_Nothing;
+    }
+
+    for(auto& gqd: gqueuedata) {
+        gqd.reset();
+
+        if (gqd.engaus_disable) {
+            //TODO
+            return l_Nothing;
+        }
+
+        if (solver->conf.gaussconf.autodisable &&
+            (gqd.big_gaussnum > 1000 && gqd.big_conflict*2+gqd.big_propagate < (uint32_t)((double)gqd.big_gaussnum*0.01))
+        ) {
+            const double perc = stats_line_percent(gqd.big_conflict*2+gqd.big_propagate, gqd.big_gaussnum);
+            if (solver->conf.verbosity) {
+                cout << "c [matrix] Disabling ALL GJ-elim in this round. "
+                " Usefulness was: " << std::setprecision(2) << std::fixed << perc <<  "%" << endl;
+            }
+            gqd.engaus_disable = true;
+        }
+    }
+    assert(qhead == trail.size());
+    assert(gqhead <= qhead);
+
+    bool unit_conflict_in_some_matrix = false;
+    while (gqhead <  qhead) {
+        const Lit p = trail[gqhead++];
+        assert(gwatches.size() > p.var());
+        vec<GaussWatched>& ws = gwatches[p.var()];
+        GaussWatched* i = ws.begin();
+        GaussWatched* j = i;
+        const GaussWatched* end = ws.end();
+
+        if (i == end)
+            continue;
+
+        for (; i != end; i++) {
+            gqueuedata[i->matrix_num].enter_matrix = true;
+            if (gmatrixes[i->matrix_num]->find_truths2(
+                i, j, p.var(), i->row_id, gqueuedata[i->matrix_num])
+            ) {
+                continue;
+            } else {
+                // only in conflict two variable
+                unit_conflict_in_some_matrix = true;
+                break;
+            }
+        }
+
+        if (i != end) {  // must conflict two variable
+            i++;
+            //copy remaining watches
+            GaussWatched* j2 = j;
+            GaussWatched* i2 = i;
+            for(; i2 != end; i2++) {
+                *j2 = *i2;
+                j2++;
+            }
+        }
+        ws.shrink_(i-j);
+
+        for (size_t g = 0; g < gqueuedata.size(); g++) {
+            if (gqueuedata[g].do_eliminate) {
+                gmatrixes[g]->eliminate_col2(p.var(), gqueuedata[g]);
+            }
+        }
+    }
+
+    llbool finret = l_Nothing;
+    for (GaussQData& gqd: gqueuedata) {
+        if (gqd.enter_matrix) {
+            gqueuedata[0].big_gaussnum++;
+            sum_EnGauss++;
+        }
+
+        //There was a unit conflict but this is not that matrix.
+        //Just skip.
+        if (unit_conflict_in_some_matrix && gqd.ret_gauss !=1) {
+            continue;
+        }
+
+
+        switch (gqd.ret_gauss) {
+            case 1:{ // unit conflict
+                //assert(confl.getType() == PropByType::binary_t && "this should hold, right?");
+                bool ret = handle_conflict<false>(gqd.confl);
+#ifdef VERBOSE_DEBUG
+                cout << "Handled conflict"
+                << " conf level:" <<  varData[gqd.confl.lit2().var()].level
+                << " conf value: " << value(gqd.confl.lit2())
+                << " failbin level: " << varData[solver->failBinLit.var()].level
+                << " failbin value: " << value(solver->failBinLit)
+                << endl;
+#endif
+
+                gqd.big_conflict++;
+                sum_Enconflict++;
+
+                if (!ret) return l_False;
+                return l_Continue;
+            }
+            case 0:{  // conflict
+                gqd.big_conflict++;
+                sum_Enconflict++;
+
+                Clause* conflPtr = solver->cl_alloc.Clause_new(
+                    gqd.conflict_clause_gauss,
+                    gqd.xorEqualFalse_gauss
+                    #ifdef STATS_NEEDED
+                    , clauseID++
+                    #endif
+                );
+
+                conflPtr->set_gauss_temp_cl();
+                gqd.confl = PropBy(solver->cl_alloc.get_offset(conflPtr));
+                gqhead = qhead = trail.size();
+
+                bool ret = handle_conflict<false>(gqd.confl);
+                solver->cl_alloc.clauseFree(gqd.confl.get_offset());
+                if (!ret) return l_False;
+                return l_Continue;
+            }
+
+            case 2:  // propagation
+            case 3: // unit propagation
+                gqd.big_propagate++;
+                sum_Enpropagate++;
+                finret = l_Continue;
+
+            case 4:
+                //nothing
+                break;
+
+            default:
+                assert(false);
+                return l_Nothing;
+        }
+    }
+    return finret;
+}
+#endif //USE_GAUSS
 
 std::pair<size_t, size_t> Searcher::remove_useless_bins(bool except_marked)
 {
@@ -2679,272 +2935,17 @@ std::pair<size_t, size_t> Searcher::remove_useless_bins(bool except_marked)
     return std::make_pair(removedIrred, removedRed);
 }
 
-string Searcher::analyze_confl_for_graphviz_graph(
-    PropBy conflHalf
-    , uint32_t& out_btlevel
-    , uint32_t &glue
-) {
-    pathC = 0;
-    Lit p = lit_Undef;
-
-    learnt_clause.clear();
-    learnt_clause.push_back(lit_Undef);      // (leave room for the asserting literal)
-    int index   = trail.size() - 1;
-    out_btlevel = 0;
-    std::stringstream resolutions_str;
-
-    PropByForGraph confl(conflHalf, failBinLit, cl_alloc);
-    do {
-        assert(!confl.isNULL());          // (otherwise should be UIP)
-
-        //Update antec_data output
-        if (p != lit_Undef) {
-            resolutions_str << " | ";
-        }
-        resolutions_str << "{ " << confl << " | " << pathC << " -- ";
-
-        for (uint32_t j = (p == lit_Undef) ? 0 : 1, size = confl.size(); j != size; j++) {
-            Lit q = confl[j];
-            const uint32_t my_var = q.var();
-
-            if (!seen[my_var] //if already handled, don't care
-                && varData[my_var].level > 0 //if it's assigned at level 0, it's assigned FALSE, so leave it out
-            ) {
-                seen[my_var] = 1;
-                assert(varData[my_var].level <= decisionLevel());
-
-                if (varData[my_var].level == decisionLevel()) {
-                    pathC++;
-                } else {
-                    learnt_clause.push_back(q);
-
-                    //Backtracking level is largest of thosee inside the clause
-                    if (varData[my_var].level > out_btlevel)
-                        out_btlevel = varData[my_var].level;
-                }
-            }
-        }
-        resolutions_str << pathC << " }";
-
-        //Go through the trail backwards, select the one that is to be resolved
-        while (!seen[trail[index--].var()]);
-
-        p = trail[index+1];
-        confl = PropByForGraph(varData[p.var()].reason, p, cl_alloc);
-        seen[p.var()] = 0; // this one is resolved
-        pathC--;
-    } while (pathC > 0); //UIP when eveything goes through this one
-    assert(pathC == 0);
-    learnt_clause[0] = ~p;
-
-    // clear out seen
-    for (uint32_t j = 0; j != learnt_clause.size(); j++)
-        seen[learnt_clause[j].var()] = 0;    // ('seen[]' is now cleared)
-
-    //Calculate glue
-    glue = calc_glue(learnt_clause);
-
-    return resolutions_str.str();
-}
-
-void Searcher::print_edges_for_graphviz_file(std::ofstream& file) const
-{
-    for (const Lit lit: trail) {
-
-        //0-decision level means it's pretty useless to put into the impl. graph
-        if (varData[lit.var()].level == 0) continue;
-
-        //Not directly connected with the conflict, drop
-        if (!seen[lit.var()]) continue;
-
-        PropBy reason = varData[lit.var()].reason;
-
-        //A decision variable, it is not propagated by any clause
-        if (reason.isNULL()) continue;
-
-        PropByForGraph prop(reason, lit, cl_alloc);
-        for (uint32_t i = 0; i < prop.size(); i++) {
-            if (prop[i] == lit //This is being propagated, don't make a circular line
-                || varData[prop[i].var()].level == 0 //'clean' clauses of 0-level lits
-            ) continue;
-
-            file << "x" << prop[i].unsign() << " -> x" << lit.unsign() << " "
-            << "[ "
-            << " label=\"";
-            for(uint32_t i2 = 0; i2 < prop.size();) {
-                //'clean' clauses of 0-level lits
-                if (varData[prop[i2].var()].level == 0) {
-                    i2++;
-                    continue;
-                }
-
-                file << prop[i2];
-                i2++;
-                if (i2 != prop.size()) file << " ";
-            }
-            file << "\""
-            << " , fontsize=8"
-            << " ];" << endl;
-        }
-    }
-}
-
-void Searcher::print_vertex_definitions_for_graphviz_file(std::ofstream& file)
-{
-    for (size_t i = 0; i < trail.size(); i++) {
-        Lit lit = trail[i];
-
-        //Only vertexes that really have been used
-        if (seen[lit.var()] == 0) continue;
-        seen[lit.var()] = 0;
-
-        file << "x" << lit.unsign()
-        << " [ "
-        << " shape=\"box\""
-        //<< ", size = 0.8"
-        << ", style=\"filled\"";
-        if (varData[lit.var()].reason.isNULL())
-            file << ", color=\"darkorange2\""; //decision var
-        else
-            file << ", color=\"darkseagreen4\""; //propagated var
-
-        //Print label
-        file
-        << ", label=\"" << (lit.sign() ? "-" : "") << "x" << lit.unsign()
-        << " @ " << varData[lit.var()].level << "\""
-        << " ];" << endl;
-    }
-}
-
-void Searcher::fill_seen_for_lits_connected_to_conflict_graph(
-    vector<Lit>& lits
-) {
-    while(!lits.empty())
-    {
-        vector<Lit> newLits;
-        for (size_t i = 0; i < lits.size(); i++) {
-            PropBy reason = varData[lits[i].var()].reason;
-            //Reason in NULL, so remove: it's got no antedecent
-            if (reason.isNULL()) continue;
-
-            #ifdef VERBOSE_DEBUG_GEN_CONFL_DOT
-            cout << "Reason for lit " << lits[i] << " : " << reason << endl;
-            #endif
-
-            PropByForGraph prop(reason, lits[i], cl_alloc);
-            for (uint32_t i2 = 0; i2 < prop.size(); i2++) {
-                const Lit lit = prop[i2];
-                assert(value(lit) != l_Undef);
-
-                //Don't put into the impl. graph lits at 0 decision level
-                if (varData[lit.var()].level == 0) continue;
-
-                //Already added, just drop
-                if (seen[lit.var()]) continue;
-
-                seen[lit.var()] = true;
-                newLits.push_back(lit);
-            }
-        }
-        lits = newLits;
-    }
-}
-
-vector<Lit> Searcher::get_lits_from_conflict(const PropBy conflPart)
-{
-    vector<Lit> lits;
-    PropByForGraph confl(conflPart, failBinLit, cl_alloc);
-    for (uint32_t i = 0; i < confl.size(); i++) {
-        const Lit lit = confl[i];
-        assert(value(lit) == l_False);
-        lits.push_back(lit);
-
-        //Put these into the impl. graph for sure
-        seen[lit.var()] = true;
-    }
-
-    return lits;
-}
-
-void Searcher::create_graphviz_confl_graph(const PropBy conflPart)
-{
-    assert(ok);
-    assert(!conflPart.isNULL());
-
-    std::stringstream s;
-    s << "confls/" << "confl" << solver->sumConflicts() << ".dot";
-    std::string filename = s.str();
-
-    std::ofstream file;
-    file.open(filename.c_str());
-    if (!file) {
-        cout << "Couldn't open filename " << filename << endl;
-        cout << "Maybe you forgot to create subdirectory 'confls'" << endl;
-        std::exit(-1);
-    }
-    file << "digraph G {" << endl;
-
-    //Special vertex indicating final conflict clause (to help us)
-    uint32_t out_btlevel, glue;
-    const std::string res = analyze_confl_for_graphviz_graph(conflPart, out_btlevel, glue);
-    file << "vertK -> dummy;";
-    file << "dummy "
-    << "[ "
-    << " shape=record"
-    << " , label=\"{"
-    << " clause: " << learnt_clause
-    << " | btlevel: " << out_btlevel
-    << " | glue: " << glue
-    << " | {resol: | " << res << " }"
-    << "}\""
-    << " , fontsize=8"
-    << " ];" << endl;
-
-    vector<Lit> lits = get_lits_from_conflict(conflPart);
-    for (const Lit lit: lits) {
-        file << "x" << lit.unsign() << " -> vertK "
-        << "[ "
-        << " label=\"" << lits << "\""
-        << " , fontsize=8"
-        << " ];" << endl;
-    }
-
-    //Special conflict vertex
-    file << "vertK"
-    << " [ "
-    << "shape=\"box\""
-    << ", style=\"filled\""
-    << ", color=\"darkseagreen\""
-    << ", label=\"K : " << lits << "\""
-    << "];" << endl;
-
-    fill_seen_for_lits_connected_to_conflict_graph(lits);
-    print_edges_for_graphviz_file(file);
-    print_vertex_definitions_for_graphviz_file(file);
-
-    file  << "}" << endl;
-    file.close();
-
-    if (conf.verbosity >= 6) {
-        cout
-        << "c Printed implication graph (with conflict clauses) to file "
-        << filename << endl;
-    };
-}
-
 template<bool update_bogoprops>
 PropBy Searcher::propagate() {
     const size_t origTrailSize = trail.size();
 
     PropBy ret;
-    if (conf.propBinFirst) {
-        ret = propagate_strict_order();
-    } else {
-        ret = propagate_any_order<update_bogoprops>();
-    }
+    ret = propagate_any_order<update_bogoprops>();
 
     //Drat -- If declevel 0 propagation, we have to add the unitaries
-    if (decisionLevel() == 0 && drat->enabled()) {
+    if (decisionLevel() == 0 &&
+        (drat->enabled() || solver->conf.simulate_drat)
+    ) {
         for(size_t i = origTrailSize; i < trail.size(); i++) {
             #ifdef DEBUG_DRAT
             if (conf.verbosity >= 6) {
@@ -2954,10 +2955,18 @@ PropBy Searcher::propagate() {
                 << endl;
             }
             #endif
-            *drat << trail[i] << fin;
+            *drat << add << trail[i]
+            #ifdef STATS_NEEDED
+            << clauseID++ << sumConflicts
+            #endif
+            << fin;
         }
         if (!ret.isNULL()) {
-            *drat << fin;
+            *drat << add
+            #ifdef STATS_NEEDED
+            << clauseID++ << sumConflicts
+            #endif
+            << fin;
         }
     }
 
@@ -2971,8 +2980,10 @@ size_t Searcher::mem_used() const
     size_t mem = HyperEngine::mem_used();
     mem += otf_subsuming_short_cls.capacity()*sizeof(OTFClause);
     mem += otf_subsuming_long_cls.capacity()*sizeof(ClOffset);
-    mem += activ_glue.capacity()*sizeof(uint32_t);
-    mem += order_heap_glue.mem_used();
+    mem += var_act_vsids.capacity()*sizeof(uint32_t);
+    mem += var_act_maple.capacity()*sizeof(uint32_t);
+    mem += order_heap_vsids.mem_used();
+    mem += order_heap_maple.mem_used();
     mem += learnt_clause.capacity()*sizeof(Lit);
     mem += hist.mem_used();
     mem += conflict.capacity()*sizeof(Lit);
@@ -3008,13 +3019,13 @@ size_t Searcher::mem_used() const
         << endl;
 
         cout
-        << "c activ_glue bytes: "
-        << activ_glue.capacity()*sizeof(uint32_t)
+        << "c order_heap_vsids bytes: "
+        << order_heap_vsids.mem_used()
         << endl;
 
         cout
-        << "c order_heap_glue bytes: "
-        << order_heap_glue.mem_used()
+        << "c order_heap_maple bytes: "
+        << order_heap_maple.mem_used()
         << endl;
 
         cout
@@ -3045,7 +3056,7 @@ void Searcher::fill_assumptions_set_from(const vector<AssumptionPair>& fill_from
 {
     #ifdef SLOW_DEBUG
     for(auto x: assumptionsSet) {
-        assert(!x);
+        assert(x == l_Undef);
     }
     #endif
 
@@ -3056,11 +3067,11 @@ void Searcher::fill_assumptions_set_from(const vector<AssumptionPair>& fill_from
     for(const AssumptionPair lit_pair: assumptions) {
         const Lit lit = lit_pair.lit_inter;
         if (lit.var() < assumptionsSet.size()) {
-            if (assumptionsSet[lit.var()]) {
+            if (assumptionsSet[lit.var()] != l_Undef) {
                 //Assumption contains the same literal twice. Shouldn't really be allowed...
                 //assert(false && "Either the assumption set contains the same literal twice, or something is very wrong in the solver.");
             } else {
-                assumptionsSet[lit.var()] = true;
+                assumptionsSet[lit.var()] = lit.sign() ? l_False : l_True;
             }
         } else {
             if (value(lit) == l_Undef) {
@@ -3076,93 +3087,78 @@ void Searcher::fill_assumptions_set_from(const vector<AssumptionPair>& fill_from
     }
 }
 
-
 void Searcher::unfill_assumptions_set_from(const vector<AssumptionPair>& unfill_from)
 {
     if (unfill_from.empty()) {
-        return;
+        goto end;
     }
 
+    //First check -- can't unset at the same time since the same
+    //internal variable may be inside 'assumptions' -- in case the variables
+    //have been replaced with each other.
     for(const AssumptionPair lit_pair: unfill_from) {
         const Lit lit = lit_pair.lit_inter;
         if (lit.var() < assumptionsSet.size()) {
-            assumptionsSet[lit.var()] = false;
+            if (assumptionsSet[lit.var()] == l_Undef) {
+                cout << "ERROR: var " << lit.var() + 1 << " is in assumptions but not in assumptionsSet" << endl;
+            }
+            assert(assumptionsSet[lit.var()] != l_Undef);
         }
     }
 
+    //Then unset
+    for(const AssumptionPair lit_pair: unfill_from) {
+        const Lit lit = lit_pair.lit_inter;
+        if (lit.var() < assumptionsSet.size()) {
+            assumptionsSet[lit.var()] = l_Undef;
+        }
+    }
+
+    end:;
     #ifdef SLOW_DEBUG
     for(auto x: assumptionsSet) {
-        assert(!x);
+        assert(x == l_Undef);
     }
     #endif
 }
 
 inline void Searcher::varDecayActivity()
 {
-    var_inc *= (1.0 / var_decay);
+    assert(VSIDS);
+    var_inc_vsids *= (1.0 / var_decay_vsids);
 }
 
-template<bool update_bogoprops>
-inline void Searcher::bump_var_activity(uint32_t var)
+void Searcher::update_var_decay_vsids()
 {
-    if (update_bogoprops) {
-        return;
-    }
-
-    activ_glue[var] += var_inc;
-
-    #ifdef SLOW_DEBUG
-    bool rescaled = false;
-    #endif
-    if (activ_glue[var] > 1e100) {
-        // Rescale:
-        for (double& act : activ_glue) {
-            act *= 1e-100;
-        }
-        #ifdef SLOW_DEBUG
-        rescaled = true;
-        #endif
-
-        //Reset var_inc
-        var_inc *= 1e-100;
-    }
-
-    // Update order_heap with respect to new activity:
-    if (order_heap_glue.inHeap(var)) {
-        order_heap_glue.decrease(var);
-    }
-
-    #ifdef SLOW_DEBUG
-    if (rescaled) {
-        assert(order_heap_glue.heap_property());
-    }
-    #endif
-}
-
-void Searcher::update_var_decay()
-{
-    if (var_decay >= conf.var_decay_max) {
-        var_decay = conf.var_decay_max;
+    if (var_decay_vsids >= conf.var_decay_vsids_max) {
+        var_decay_vsids = conf.var_decay_vsids_max;
     }
 }
 
-void Searcher::consolidate_watches()
+void Searcher::consolidate_watches(const bool full)
 {
     double t = cpuTime();
-    watches.consolidate();
+    if (full) {
+        watches.full_consolidate();
+    } else {
+        watches.consolidate();
+    }
     double time_used = cpuTime() - t;
 
-    if (conf.verbosity >= 2) {
+    if (conf.verbosity) {
         cout
-        << "c [consolidate]"
+        << "c [consolidate] "
+        << (full ? "full" : "mini")
         << conf.print_times(time_used)
         << endl;
     }
 
+    std::stringstream ss;
+    ss << "consolidate " << (full ? "full" : "mini") << " watches";
     if (sqlStats) {
         sqlStats->time_passed_min(
             solver
-            , "consolidate watches"
+            , ss.str()
             , time_used
         );
     }
@@ -3177,7 +3173,7 @@ void Searcher::write_long_cls(
     for(ClOffset c: clauses)
     {
         Clause& cl = *cl_alloc.ptr(c);
-        assert(cl.size() > 3);
+        assert(cl.size() > 2);
         f.put_uint32_t(cl.size());
         for(const Lit l: cl)
         {
@@ -3202,79 +3198,36 @@ void Searcher::read_long_cls(
         tmp_cl.clear();
 
         uint32_t sz = f.get_uint32_t();
-        for(size_t i = 0; i < sz; i++)
+        for(size_t j = 0; j < sz; j++)
         {
             tmp_cl.push_back(f.get_lit());
         }
-        ClauseStats stats;
+        ClauseStats cl_stats;
         if (red) {
-            f.get_struct(stats);
+            f.get_struct(cl_stats);
         }
 
         Clause* cl = cl_alloc.Clause_new(tmp_cl
+        , cl_stats.last_touched
         #ifdef STATS_NEEDED
-        , stats.introduced_at_conflict
-        , stats.ID
+        , cl_stats.ID
         #endif
         );
         if (red) {
-            cl->makeRed(stats.glue);
+            cl->makeRed(cl_stats.glue, cla_inc);
         }
-        cl->stats = stats;
+        cl->stats = cl_stats;
         attachClause(*cl);
         const ClOffset offs = cl_alloc.get_offset(cl);
         if (red) {
-            if (cl->stats.glue <= conf.glue_must_keep_clause_if_below_or_eq) {
-                cl->stats.which_red_array = 0;
-            } else{
-                cl->stats.which_red_array = 1;
-            }
-
-            longRedCls[0].push_back(cl->stats.which_red_array);
+            assert(cl->stats.which_red_array < longRedCls.size());
+            longRedCls[cl->stats.which_red_array].push_back(offs);
+            litStats.redLits += cl->size();
         } else {
             longIrredCls.push_back(offs);
+            litStats.irredLits += cl->size();
         }
     }
-}
-
-unsigned Searcher::guess_clause_array(
-    const uint32_t glue
-    , const uint32_t backtrack_lev
-    , const double vsids_cutoff
-    , double backtrack_cutoff
-    , const double offset_percent
-    , bool count_antec_glue_long_reds
-) const {
-    uint32_t votes = 0;
-    double perc_trail_depth = (double)trail.size()/hist.trailDepthHistLT.avg();
-    if (perc_trail_depth < (0.3-offset_percent)) {
-        votes++;
-    }
-
-    double perc_dec_lev = (double)decisionLevel()/hist.decisionLevelHistLT.avg();
-    if (perc_dec_lev < (0.3-offset_percent)) {
-        votes++;
-    }
-
-    double perc_backtrack_lev = (double)backtrack_lev/hist.decisionLevelHistLT.avg();
-    if (perc_backtrack_lev < (backtrack_cutoff-offset_percent)) {
-        votes++;
-    }
-
-    if (count_antec_glue_long_reds) {
-        if (antec_data.glue_long_reds.avg() > 12) {
-            votes += 1;
-        }
-    }
-
-    if (antec_data.vsids_vars.avg() > vsids_cutoff) {
-        votes += 2;
-    }
-
-    if (votes > 2) {
-        return 0;
-    }
-    return 1;
 }
 
 void Searcher::write_binary_cls(
@@ -3305,38 +3258,7 @@ void Searcher::write_binary_cls(
     }
 }
 
-void Searcher::write_tri_cls(
-    SimpleOutFile& f
-    , bool red
-) const {
-    if (red) {
-        f.put_uint64_t(binTri.redTris);
-    } else {
-        f.put_uint64_t(binTri.irredTris);
-    }
-
-    size_t at = 0;
-    for(watch_subarray_const ws: watches)
-    {
-        Lit lit1 = Lit::toLit(at);
-        at++;
-        for(Watched w: ws)
-        {
-            if (w.isTri() && w.red() == red) {
-                if (lit1 < w.lit2()
-                    && w.lit2() < w.lit3()
-                ) {
-                    f.put_lit(lit1);
-                    f.put_lit(w.lit2());
-                    f.put_lit(w.lit3());
-                }
-            }
-        }
-    }
-}
-
-
-void Searcher::read_binary_cls(
+uint64_t Searcher::read_binary_cls(
     SimpleInFile& f
     , bool red
 ) {
@@ -3347,20 +3269,7 @@ void Searcher::read_binary_cls(
         const Lit lit2 = f.get_lit();
         attach_bin_clause(lit1, lit2, red);
     }
-}
-
-void Searcher::read_tri_cls(
-    SimpleInFile& f
-    , bool red
-) {
-    uint64_t num = f.get_uint64_t();
-    for(uint64_t i = 0; i < num; i++)
-    {
-        const Lit lit1 = f.get_lit();
-        const Lit lit2 = f.get_lit();
-        const Lit lit3 = f.get_lit();
-        attach_tri_clause(lit1, lit2, lit3, red);
-    }
+    return num;
 }
 
 void Searcher::save_state(SimpleOutFile& f, const lbool status) const
@@ -3368,7 +3277,8 @@ void Searcher::save_state(SimpleOutFile& f, const lbool status) const
     assert(decisionLevel() == 0);
     PropEngine::save_state(f);
 
-    f.put_vector(activ_glue);
+    f.put_vector(var_act_vsids);
+    f.put_vector(var_act_maple);
     f.put_vector(model);
     f.put_vector(conflict);
 
@@ -3376,8 +3286,6 @@ void Searcher::save_state(SimpleOutFile& f, const lbool status) const
     if (status == l_Undef) {
         write_binary_cls(f, false);
         write_binary_cls(f, true);
-        write_tri_cls(f, false);
-        write_tri_cls(f, true);
         write_long_cls(longIrredCls, f, false);
         for(auto& lredcls: longRedCls) {
             write_long_cls(lredcls, f, true);
@@ -3390,12 +3298,13 @@ void Searcher::load_state(SimpleInFile& f, const lbool status)
     assert(decisionLevel() == 0);
     PropEngine::load_state(f);
 
-    f.get_vector(activ_glue);
+    f.get_vector(var_act_vsids);
+    f.get_vector(var_act_maple);
     for(size_t i = 0; i < nVars(); i++) {
         if (varData[i].removed == Removed::none
             && value(i) == l_Undef
         ) {
-            insertVarOrder(i);
+            insert_var_order_all(i);
         }
     }
     f.get_vector(model);
@@ -3403,10 +3312,8 @@ void Searcher::load_state(SimpleInFile& f, const lbool status)
 
     //Clauses
     if (status == l_Undef) {
-        read_binary_cls(f, false);
-        read_binary_cls(f, true);
-        read_tri_cls(f, false);
-        read_tri_cls(f, true);
+        binTri.irredBins = read_binary_cls(f, false);
+        binTri.redBins =read_binary_cls(f, true);
         read_long_cls(f, false);
         for(size_t i = 0; i < longRedCls.size(); i++) {
             read_long_cls(f, true);
@@ -3415,12 +3322,15 @@ void Searcher::load_state(SimpleInFile& f, const lbool status)
 }
 
 
+//Normal running
 template
-void Searcher::cancelUntil<true>(uint32_t level);
-template
-void Searcher::cancelUntil<false>(uint32_t level);
+void Searcher::cancelUntil<true, false>(uint32_t level);
 
-template<bool also_insert_varorder>
+//During inprocessing, dont update anyting really (probing, distilling)
+template
+void Searcher::cancelUntil<false, true>(uint32_t level);
+
+template<bool do_insert_var_order, bool update_bogoprops>
 void Searcher::cancelUntil(uint32_t level)
 {
     #ifdef VERBOSE_DEBUG
@@ -3431,9 +3341,10 @@ void Searcher::cancelUntil(uint32_t level)
 
     if (decisionLevel() > level) {
         #ifdef USE_GAUSS
-        for (Gaussian* gauss : gauss_matrixes) {
-            gauss->canceling(trail_lim[level]);
-        }
+        for (EGaussian* gauss: gmatrixes)
+            if (gauss) {
+                gauss->canceling(trail_lim[level]);
+            }
         #endif //USE_GAUSS
 
         //Go through in reverse order, unassign & insert then
@@ -3455,9 +3366,29 @@ void Searcher::cancelUntil(uint32_t level)
 
             const uint32_t var = trail[sublevel].var();
             assert(value(var) != l_Undef);
+
+             if (!update_bogoprops && !VSIDS) {
+                assert(sumConflicts >= varData[var].last_picked);
+                uint32_t age = sumConflicts - varData[var].last_picked;
+                if (age > 0) {
+                    //adjusted reward -> higher if conflicted more or quicker
+                    double adjusted_reward = ((double)(varData[var].conflicted)) / ((double)age);
+
+                    double old_activity = var_act_maple[var];
+                    var_act_maple[var] = step_size * adjusted_reward + ((1.0 - step_size) * old_activity);
+                    if (order_heap_maple.inHeap(var)) {
+                        if (var_act_maple[var] > old_activity)
+                            order_heap_maple.decrease(var);
+                        else
+                            order_heap_maple.increase(var);
+                    }
+                }
+                varData[var].cancelled = sumConflicts;
+            }
+
             assigns[var] = l_Undef;
-            if (also_insert_varorder) {
-                insertVarOrder(var);
+            if (do_insert_var_order) {
+                insert_var_order(var);
             }
         }
         qhead = trail_lim[level];
@@ -3473,31 +3404,84 @@ void Searcher::cancelUntil(uint32_t level)
     #endif
 }
 
-#ifdef USE_GAUSS
-void Searcher::clearGaussMatrixes()
+inline bool Searcher::check_order_heap_sanity() const
 {
-    /*assert(decisionLevel() == 0);
-    for (uint32_t i = 0; i < gauss_matrixes.size(); i++)
-        delete gauss_matrixes[i];
-    gauss_matrixes.clear();*/
+    if (conf.sampling_vars) {
+        for(uint32_t outside_var: *conf.sampling_vars) {
+            uint32_t outer_var = map_to_with_bva(outside_var);
+            outer_var = solver->varReplacer->get_var_replaced_with_outer(outer_var);
+            uint32_t int_var = map_outer_to_inter(outer_var);
 
-    /*
-    for (uint32_t i = 0; i != freeLater.size(); i++)
-        clauseAllocator.clauseFree(freeLater[i]);
-    freeLater.clear();
-    */
-}
-#endif
+            assert(varData[int_var].removed == Removed::none ||
+                varData[int_var].removed == Removed::decomposed);
 
-#ifdef USE_GAUSS
-void Searcher::clear_gauss()
-{
-    for(Gaussian* g: gauss_matrixes) {
-        if (conf.verbosity >= 2) {
-            g->print_stats();
+            if (int_var < nVars() &&
+                varData[int_var].removed == Removed::none &&
+                value(int_var) == l_Undef
+            ) {
+                order_heap_vsids.inHeap(int_var);
+                order_heap_maple.inHeap(int_var);
+            }
         }
+    }
+
+    for(size_t i = 0; i < nVars(); i++)
+    {
+        if (varData[i].removed == Removed::none
+            && value(i) == l_Undef)
+        {
+            if (!order_heap_vsids.inHeap(i)) {
+                cout << "ERROR var " << i+1 << " not in VSIDS heap."
+                << " value: " << value(i)
+                << " removed: " << removed_type_to_string(varData[i].removed)
+                << endl;
+                return false;
+            }
+            if (!order_heap_maple.inHeap(i)) {
+                cout << "ERROR var " << i+1 << " not in !VSIDS heap."
+                << " value: " << value(i)
+                << " removed: " << removed_type_to_string(varData[i].removed)
+                << endl;
+                return false;
+            }
+        }
+    }
+    assert(order_heap_vsids.heap_property());
+    assert(order_heap_maple.heap_property());
+
+    return true;
+}
+
+#ifdef USE_GAUSS
+void Searcher::clearEnGaussMatrixes()
+{
+    for (auto& gqd: gqueuedata) {
+        if (solver->conf.verbosity && gqd.big_gaussnum > 0) {
+            cout << "c [gauss] big_conflict/big_gaussnum:" << (double)gqd.big_conflict/(double)gqd.big_gaussnum*100.0 << " %" <<endl;
+            cout << "c [gauss] big_propagate/big_gaussnum:" << (double)gqd.big_propagate/(double)gqd.big_gaussnum*100.0 << " %" <<endl;
+        }
+
+        if (solver->conf.verbosity >= 2 && gqd.big_gaussnum > 0) {
+            cout << "c [gauss] big_propagate  : "; print_value_kilo_mega(gqd.big_propagate); cout << endl;
+            cout << "c [gauss] big_conflict   : "; print_value_kilo_mega(gqd.big_conflict); cout << endl;
+            cout << "c [gauss] big_gaussnum   : "; print_value_kilo_mega(gqd.big_gaussnum); cout << endl;
+
+            cout << "c [gauss] - sumstats -" << endl;
+            cout << "c [gauss] sum_Enpropagate: "; print_value_kilo_mega(sum_Enpropagate); cout << endl;
+            cout << "c [gauss] sum_Enconflict : "; print_value_kilo_mega(sum_Enconflict); cout << endl;
+            cout << "c [gauss] sum_EnGauss    : "; print_value_kilo_mega(sum_EnGauss); cout << endl;
+        }
+        gqd.reset_stats();
+    }
+
+    //cout << "Clearing matrixes" << endl;
+    for(EGaussian* g: gmatrixes) {
         delete g;
     }
-    gauss_matrixes.clear();
+    for(auto& w: gwatches) {
+        w.clear();
+    }
+    gmatrixes.clear();
+    gqueuedata.clear();
 }
 #endif

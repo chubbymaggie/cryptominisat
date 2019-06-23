@@ -1,23 +1,25 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
 
 #ifndef __PROBER_H__
 #define __PROBER_H__
@@ -41,7 +43,7 @@ class Solver;
 
 class Prober {
     public:
-        Prober(Solver* _solver);
+        explicit Prober(Solver* _solver);
         bool probe(vector<uint32_t>* probe_order = NULL);
         int force_stamp = -1; // For testing. 1,2 = DFS (2=irred, 1=red), 0 = BFS, -1 = DONTCARE
 
@@ -87,7 +89,7 @@ class Prober {
                 return *this;
             }
 
-            void print(const size_t nVars) const
+            void print(const size_t nVars, const bool do_print_times) const
             {
                 cout << "c -------- PROBE STATS ----------" << endl;
                 print_stats_line("c probe time"
@@ -102,9 +104,10 @@ class Prober {
                     , "s/call"
                 );
 
+                int64_t unused_time = ((int64_t)timeAllocated - (int64_t)(propStats.bogoProps + propStats.otfHyperTime));
                 print_stats_line("c unused Mega BP+HP"
-                    , (double)(timeAllocated - (propStats.bogoProps + propStats.otfHyperTime))/(1000.0*1000.0)
-                    , ratio_for_stat(cpu_time, propStats.bogoProps + propStats.otfHyperTime)*(double)(timeAllocated - (propStats.bogoProps + propStats.otfHyperTime))
+                    , (double)unused_time/(1000.0*1000.0)
+                    , ratio_for_stat(cpu_time, propStats.bogoProps + propStats.otfHyperTime)*(double)unused_time
                     , "est. secs"
                 );
 
@@ -166,7 +169,7 @@ class Prober {
                     , cpu_time
                     , "s");
 
-                conflStats.print(cpu_time);
+                conflStats.print(cpu_time, do_print_times);
                 propStats.print(cpu_time);
                 cout << "c -------- PROBE STATS END ----------" << endl;
             }
@@ -216,14 +219,14 @@ class Prober {
         void checkOTFRatio();
         uint64_t limit_used() const;
         void reset_stats_and_state();
-        uint64_t calc_numpropstodo();
+        uint64_t calc_num_props_limit();
         void clean_clauses_before_probe();
-        uint64_t update_numpropstodo_based_on_prev_performance(uint64_t numPropsTodo);
+        uint64_t update_num_props_limit_based_on_prev_perf(uint64_t num_props_limit);
         void clean_clauses_after_probe();
-        void check_if_must_disable_otf_hyperbin_and_tred(const uint64_t numPropsTodo);
+        void check_if_must_disable_otf_hyperbin_and_tred(const uint64_t num_props_limit);
         void check_if_must_disable_cache_update();
         vector<uint32_t> randomize_possible_choices();
-        void update_and_print_stats(const double myTime, const uint64_t numPropsTodo);
+        void update_and_print_stats(const double myTime, const uint64_t num_props_limit);
         bool check_timeout_due_to_hyperbin();
 
         //For bothprop
@@ -235,7 +238,7 @@ class Prober {
         void clear_up_before_first_set();
 
         void update_cache(Lit thisLit, Lit lit, size_t numElemsSet);
-        void check_and_set_both_prop(uint32_t var, bool first);
+        void check_and_set_both_prop(Lit probed_lit, uint32_t var, bool first);
         void add_rest_of_lits_to_cache(Lit lit);
 
         //For hyper-bin resolution

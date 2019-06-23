@@ -1,23 +1,27 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
+#ifndef TEST_HELPER__H
+#define TEST_HELPER__H
 
 #ifdef KLEE
 #include <klee/klee.h>
@@ -27,16 +31,19 @@
 #include "gtest/gtest.h"
 #endif
 
-#include "cryptominisat4/solvertypesmini.h"
+#include "cryptominisat5/solvertypesmini.h"
 #include <vector>
 #include <ostream>
 #include <iostream>
 #include <sstream>
+#include <functional>
+#include <cctype>
 #include <cassert>
+#include <algorithm>
 #include "src/solver.h"
 #include "src/stamp.h"
 #include "src/xor.h"
-#include "cryptominisat4/cryptominisat.h"
+#include "cryptominisat5/cryptominisat.h"
 
 using std::cout;
 using std::endl;
@@ -86,8 +93,8 @@ vector<Lit> str_to_cl(const string& data)
     }
 
     vector<Lit> ret;
-    for(string& token: tokens) {
-        long int i = str_to_long_int(token);
+    for(string& token2: tokens) {
+        long int i = str_to_long_int(token2);
         assert(i == (int)i);
         Lit lit(std::abs(i)-1, i < 0);
         ret.push_back(lit);
@@ -188,18 +195,6 @@ void add_impl_cls(
                 cl.push_back(ws.lit2());
                 ret.push_back(cl);
             }
-
-            if (ws.isTri()
-                && lit < ws.lit2()
-                && lit < ws.lit3()
-                && ((add_irred && !ws.red()) || (add_red && ws.red()))
-            ) {
-                vector<Lit> cl;
-                cl.push_back(lit);
-                cl.push_back(ws.lit2());
-                cl.push_back(ws.lit3());
-                ret.push_back(cl);
-            }
         }
     }
 }
@@ -218,6 +213,8 @@ vector<vector<Lit> > get_red_cls(const Solver* s)
 {
     vector<vector<Lit> > ret;
     add_cls(ret, s, s->longRedCls[0]);
+    add_cls(ret, s, s->longRedCls[1]);
+    add_cls(ret, s, s->longRedCls[2]);
     add_impl_cls(ret, s, false, true);
 
     return ret;
@@ -330,6 +327,21 @@ void check_red_cls_contains(const Solver* s, const string& data)
         cout << endl;
     }
     EXPECT_TRUE(found_cl);
+}
+
+unsigned get_num_red_cls_contains(const Solver* s, const string& data)
+{
+    unsigned found_cl = 0;
+    vector<Lit> looking_for = str_to_cl(data);
+    vector<vector<Lit> > cls = get_red_cls(s);
+
+    for(auto cl: cls) {
+        if (cl == looking_for) {
+            found_cl++;
+        }
+    }
+
+    return found_cl;
 }
 
 
@@ -564,6 +576,111 @@ bool clause_satisfied(const string& data, vector<lbool>& solution)
     return false;
 }
 
+uint32_t count_num_undef_in_solution(const Solver* s)
+{
+    uint32_t num = 0;
+    for(size_t i = 0; i < s->nVarsOuter(); i++) {
+        if (s->model_value(i) == l_Undef) {
+            num++;
+        }
+    }
+    return num;
+}
+
+struct cnfdata {
+    int64_t num_cls_per_header = -1;
+    int64_t num_vars_per_header = -1;
+    vector<vector<Lit>> cls;
+    uint64_t num_vars = 0;
+};
+
+template<typename Out>
+void split(const std::string &s, char delim, Out result) {
+    std::stringstream ss(s);
+    std::string item;
+    while (std::getline(ss, item, delim)) {
+        *(result++) = item;
+    }
+}
+
+std::vector<std::string> split(const std::string &s, char delim) {
+    std::vector<std::string> elems;
+    split(s, delim, std::back_inserter(elems));
+    return elems;
+}
+
+cnfdata cnf_file_read(std::string fname)
+{
+    cnfdata cnfdat;
+
+    std::ifstream file(fname);
+    std::string str;
+    std::string file_contents;
+    vector<Lit> cl;
+    while (std::getline(file, str))
+    {
+        //cout << "CNF LINE: " << str << endl;
+        if (str.find("cnf") != string::npos) {
+            str.erase(0,5);
+            vector<string> s = split(rtrim(ltrim(str)), ' ');
+            assert(s.size() == 2);
+            cnfdat.num_vars_per_header = std::stoi(s[0]);
+            cnfdat.num_cls_per_header = std::stoi(s[1]);
+            continue;
+        }
+
+        if (str.find("c ") == 0) {
+            continue;
+        }
+
+        cl.clear();
+        vector<string> s = split(rtrim(ltrim(str)), ' ');
+        for(string& l: s) {
+            if (l.length() == 0)
+                continue;
+
+            int x = std::stoi(l);
+            if (x == 0) {
+                break;
+            }
+            uint64_t var = std::abs(x)-1;
+            cnfdat.num_vars = std::max(cnfdat.num_vars, var+1);
+            bool sign = x < 0;
+            cl.push_back(Lit(var, sign));
+        }
+        cnfdat.cls.push_back(cl);
+    }
+    return cnfdat;
+}
+
+bool cl_eq(const vector<Lit>& lits1, const vector<Lit>& lits2)
+{
+    if (lits1.size() != lits2.size())
+        return false;
+
+
+
+    vector<Lit> cl1_s = lits1;
+    std::sort(cl1_s.begin(), cl1_s.end());
+
+    vector<Lit> cl2_s = lits2;
+    std::sort(cl2_s.begin(), cl2_s.end());
+    for(size_t i = 0; i < cl1_s.size(); i++) {
+        if (cl1_s[i] != cl2_s[i])
+            return false;
+    }
+    return true;
+}
+
+bool cl_exists(const vector<vector<Lit> >& cls, const vector<Lit>& cl) {
+    for(const vector<Lit>& cli: cls) {
+        if (cl_eq(cli, cl)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 // string print(const vector<Lit>& dat) {
 //     std::stringstream m;
 //     for(size_t i = 0; i < dat.size();) {
@@ -575,3 +692,5 @@ bool clause_satisfied(const string& data, vector<lbool>& solution)
 //     }
 //     return m.str();
 // }
+
+#endif //TEST_HELPER__H

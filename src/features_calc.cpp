@@ -1,23 +1,25 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Yuri Malitsky and Horst Samulowitz
+Copyright (c) 2018, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include <vector>
 #include <cmath>
@@ -57,30 +59,6 @@ void SolveFeaturesCalc::for_one_clause(
             func_each_cl(size, pos_vars, neg_vars);
             func_each_lit(lit, size, pos_vars, neg_vars);
             func_each_lit(cl.lit2(), size, pos_vars, neg_vars);
-            break;
-        }
-
-        case CMSat::watch_tertiary_t: {
-            if (cl.red()) {
-                //only irred cls
-                break;
-            }
-            if (lit > cl.lit2()) {
-                //only count once
-                break;
-            }
-
-            assert(cl.lit2() < cl.lit3());
-
-            pos_vars += !lit.sign();
-            pos_vars += !cl.lit2().sign();
-            pos_vars += !cl.lit3().sign();
-            size = 3;
-            neg_vars = size - pos_vars;
-            func_each_cl(size, pos_vars, neg_vars);
-            func_each_lit(lit, size, pos_vars, neg_vars);
-            func_each_lit(cl.lit2(), size, pos_vars, neg_vars);
-            func_each_lit(cl.lit3(), size, pos_vars, neg_vars);
             break;
         }
 
@@ -129,8 +107,8 @@ void SolveFeaturesCalc::for_all_clauses(Function func_each_cl, Function2 func_ea
 
 void SolveFeaturesCalc::fill_vars_cls()
 {
-    feat.numVars = solver->nVars();
-    feat.numClauses = solver->longIrredCls.size() + solver->binTri.irredBins + solver->binTri.irredTris;
+    feat.numVars = solver->get_num_free_vars();
+    feat.numClauses = solver->longIrredCls.size() + solver->binTri.irredBins;
     myVars.resize(solver->nVars());
 
     auto func_each_cl = [&](unsigned /*size*/, unsigned pos_vars, unsigned /*neg_vars*/) -> bool {
@@ -168,7 +146,7 @@ void SolveFeaturesCalc::calculate_clause_stats()
 
         double _pnr = 0.5 + ((2.0 * (double)pos_vars - (double)size) / (2.0 * (double)size));
         feat.pnr_cls_min = std::min(feat.pnr_cls_min, _pnr);
-        feat.pnr_cls_max = std::min(feat.pnr_cls_max, _pnr);
+        feat.pnr_cls_max = std::max(feat.pnr_cls_max, _pnr);
         feat.pnr_cls_mean += _pnr;
     };
     for_all_clauses(func_each_cl, empty_func);
@@ -177,7 +155,6 @@ void SolveFeaturesCalc::calculate_clause_stats()
     feat.pnr_cls_mean /= (double)feat.numClauses;
     feat.horn /= (double)feat.numClauses;
     feat.binary = float_div(solver->binTri.irredBins, feat.numClauses);
-    feat.trinary = float_div(solver->binTri.irredTris, feat.numClauses);
 
     feat.vcg_cls_spread = feat.vcg_cls_max - feat.vcg_cls_min;
     feat.pnr_cls_spread = feat.pnr_cls_max - feat.pnr_cls_min;
@@ -195,18 +172,18 @@ void SolveFeaturesCalc::calculate_variable_stats()
 
         double _size = myVars[vv].size / (double)feat.numClauses;
         feat.vcg_var_min = std::min(feat.vcg_var_min, _size);
-        feat.vcg_var_max = std::min(feat.vcg_var_max, _size);
+        feat.vcg_var_max = std::max(feat.vcg_var_max, _size);
         feat.vcg_var_mean += _size;
 
         double _pnr = 0.5 + ((2.0 * myVars[vv].numPos - myVars[vv].size)
                              / (2.0 * myVars[vv].size));
         feat.pnr_var_min = std::min(feat.pnr_var_min, _pnr);
-        feat.pnr_var_max = std::min(feat.pnr_var_max, _pnr);
+        feat.pnr_var_max = std::max(feat.pnr_var_max, _pnr);
         feat.pnr_var_mean += _pnr;
 
         double _horn = myVars[vv].horn / (double)feat.numClauses;
-        feat.horn_min = std::min(feat.horn_max, _horn);
-        feat.horn_max = std::min(feat.horn_max, _horn);
+        feat.horn_min = std::min(feat.horn_min, _horn);
+        feat.horn_max = std::max(feat.horn_max, _horn);
         feat.horn_mean += _horn;
     }
 
@@ -319,7 +296,9 @@ void SolveFeaturesCalc::calculate_cl_distributions(
         const Clause& cl = *solver->cl_alloc.ptr(off);
         size_mean += cl.size();
         glue_mean += cl.stats.glue;
-        activity_mean += cl.stats.activity/cla_inc;
+        if (cl.red()) {
+            activity_mean += (double)cl.stats.activity/cla_inc;
+        }
     }
     size_mean /= clauses.size();
     glue_mean /= clauses.size();
@@ -331,7 +310,7 @@ void SolveFeaturesCalc::calculate_cl_distributions(
         const Clause& cl = *solver->cl_alloc.ptr(off);
         size_var += std::pow(size_mean-cl.size(), 2);
         glue_var += std::pow(glue_mean-cl.stats.glue, 2);
-        activity_var += std::pow(activity_mean-cl.stats.activity/cla_inc, 2);
+        activity_var += std::pow(activity_mean-(double)cl.stats.activity/cla_inc, 2);
     }
     size_var /= clauses.size();
     glue_var /= clauses.size();
@@ -344,6 +323,34 @@ void SolveFeaturesCalc::calculate_cl_distributions(
     distrib_data.size_distr_var = size_var;
     distrib_data.activity_distr_mean = activity_mean;
     distrib_data.activity_distr_var = activity_var;
+}
+
+void SolveFeaturesCalc::normalise_values()
+{
+    if (feat.vcg_var_min == std::numeric_limits<double>::max())
+        feat.vcg_var_min = -1;
+    if (feat.vcg_var_max == std::numeric_limits<double>::min())
+        feat.vcg_var_max = -1;
+
+    if (feat.vcg_cls_min  == std::numeric_limits<double>::max())
+        feat.vcg_cls_min = -1;
+    if (feat.vcg_cls_max == std::numeric_limits<double>::min())
+        feat.vcg_cls_max = -1;
+
+    if (feat.pnr_var_min == std::numeric_limits<double>::max())
+        feat.pnr_var_min = -1;
+    if (feat.pnr_var_max == std::numeric_limits<double>::min())
+        feat.pnr_var_max = -1;
+
+    if (feat.horn_min == std::numeric_limits<double>::max())
+        feat.horn_min = -1;
+    if (feat.horn_max == std::numeric_limits<double>::min())
+        feat.horn_max = -1;
+
+    if (feat.pnr_cls_min == std::numeric_limits<double>::max())
+        feat.pnr_cls_min = -1;
+    if (feat.pnr_cls_max == std::numeric_limits<double>::min())
+        feat.pnr_cls_max = -1;
 }
 
 SolveFeatures SolveFeaturesCalc::extract()
@@ -361,16 +368,23 @@ SolveFeatures SolveFeaturesCalc::extract()
         feat.var_cl_ratio = (double)feat.numVars/ (double)feat.numClauses;
     }
 
-    calculate_clause_stats();
-    calculate_variable_stats();
+    if (feat.numClauses > 0 && feat.numVars > 0) {
+        calculate_clause_stats();
+        calculate_variable_stats();
 
-    calculate_extra_clause_stats();
-    calculate_extra_var_stats();
+        calculate_extra_clause_stats();
+        calculate_extra_var_stats();
 
-    calculate_cl_distributions(solver->longRedCls[0], feat.red_cl_distrib);
-    calculate_cl_distributions(solver->longIrredCls, feat.irred_cl_distrib);
+        if (!solver->longRedCls[0].empty()) {
+            calculate_cl_distributions(solver->longRedCls[0], feat.red_cl_distrib);
+        }
+        if (!solver->longIrredCls.empty()) {
+            calculate_cl_distributions(solver->longIrredCls, feat.irred_cl_distrib);
+        }
+    }
+    normalise_values();
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity > 5) {
         cout << "c [features] extracted"
         << solver->conf.print_times(cpuTime() - start_time)
         << endl;

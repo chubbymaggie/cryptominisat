@@ -1,25 +1,28 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "cnf.h"
+
+#include <stdexcept>
 
 #include "vardata.h"
 #include "solvertypes.h"
@@ -34,7 +37,7 @@ void CNF::new_var(const bool bva, const uint32_t orig_outer)
 {
     if (nVars() >= 1ULL<<28) {
         cout << "ERROR! Variable requested is far too large" << endl;
-        std::exit(-1);
+        throw std::runtime_error("ERROR! Variable requested is far too large");
     }
 
     minNumVars++;
@@ -107,29 +110,31 @@ void CNF::new_vars(const size_t n)
     enlarge_minimal_datastructs(n);
     enlarge_nonminimial_datastructs(n);
 
-    uint64_t f = interToOuterMain.size() + n;
-    f += 0xfff - (f&0xfff);
-    interToOuterMain.reserve(f);
-    outerToInterMain.reserve(f);
-    uint64_t g = outer_to_with_bva_map.size() + n;
-    g += 0xfff - (g&0xfff);
-    outer_to_with_bva_map.reserve(g);
+    size_t inter_at = interToOuterMain.size();
+    interToOuterMain.insert(interToOuterMain.end(), n, 0);
+
+    size_t outer_at = outerToInterMain.size();
+    outerToInterMain.insert(outerToInterMain.end(), n, 0);
+
+    size_t outer_to_with_bva_at = outer_to_with_bva_map.size();
+    outer_to_with_bva_map.insert(outer_to_with_bva_map.end(), n, 0);
+
     for(int i = n-1; i >= 0; i--) {
         const uint32_t minVar = nVars()-i-1;
         const uint32_t maxVar = nVarsOuter()-i-1;
 
-        interToOuterMain.push_back(maxVar);
+        interToOuterMain[inter_at++] = maxVar;
         const uint32_t x = interToOuterMain[minVar];
         interToOuterMain[minVar] = maxVar;
         interToOuterMain[maxVar] = x;
 
-        outerToInterMain.push_back(maxVar);
+        outerToInterMain[outer_at++] = maxVar;
         outerToInterMain[maxVar] = minVar;
         outerToInterMain[x] = maxVar;
 
         swapVars(nVarsOuter()-i-1, i);
         varData[nVars()-i-1].is_bva = false;
-        outer_to_with_bva_map.push_back(nVarsOuter()-i-1);
+        outer_to_with_bva_map[outer_to_with_bva_at++] = nVarsOuter()-i-1;
     }
 
     #ifdef SLOW_DEBUG
@@ -145,17 +150,20 @@ void CNF::swapVars(const uint32_t which, const int off_by)
 
 void CNF::enlarge_nonminimial_datastructs(size_t n)
 {
-    assigns.resize(assigns.size() + n, l_Undef);
-    varData.resize(varData.size() + n, VarData());
-    depth.resize(depth.size() + n);
+    assigns.insert(assigns.end(), n, l_Undef);
+    varData.insert(varData.end(), n, VarData());
+    depth.insert(depth.end(), n, 0);
 }
 
 void CNF::enlarge_minimal_datastructs(size_t n)
 {
-    watches.resize(watches.size() + 2*n);
-    seen.resize(seen.size() + 2*n, 0);
-    seen2.resize(seen2.size() + 2*n,0);
-    permDiff.resize(seen2.size() + 2*n,0);
+    watches.insert(2*n);
+    #ifdef USE_GAUSS
+    gwatches.insert(2*n);
+    #endif
+    seen.insert(seen.end(), 2*n, 0);
+    seen2.insert(seen2.end(), 2*n, 0);
+    permDiff.insert(permDiff.end(), 2*n, 0);
 }
 
 void CNF::save_on_var_memory()
@@ -165,10 +173,19 @@ void CNF::save_on_var_memory()
     //never resize interToOuterMain, outerToInterMain
 
     watches.resize(nVars()*2);
-    watches.consolidate(); //not using the one with SQL because it's already saved
+    watches.consolidate();
+
+    #ifdef USE_GAUSS
+    gwatches.resize(nVars()*2);
+    //TODO
+    //gwatches.consolidate();
+    #endif
+
     implCache.save_on_var_memorys(nVars());
     stamp.save_on_var_memory(nVars());
-    longRedCls.shrink_to_fit();
+    for(auto& l: longRedCls) {
+        l.shrink_to_fit();
+    }
     longIrredCls.shrink_to_fit();
 
     seen.resize(nVars()*2);
@@ -217,7 +234,9 @@ uint64_t CNF::mem_used_longclauses() const
     uint64_t mem = 0;
     mem += cl_alloc.mem_used();
     mem += longIrredCls.capacity()*sizeof(ClOffset);
-    mem += longRedCls.capacity()*sizeof(ClOffset);
+    for(auto& l: longRedCls) {
+        mem += l.capacity()*sizeof(ClOffset);
+    }
     return mem;
 }
 
@@ -234,35 +253,11 @@ uint64_t CNF::print_mem_used_longclauses(const size_t totalMem) const
     return mem;
 }
 
-bool CNF::redundant(const Watched& ws) const
-{
-    return (   (ws.isBin() && ws.red())
-            || (ws.isTri()   && ws.red())
-            || (ws.isClause()
-                && cl_alloc.ptr(ws.get_offset())->red()
-                )
-    );
-}
-
-bool CNF::redundant_or_removed(const Watched& ws) const
-{
-    if (ws.isBin() || ws.isTri()) {
-        return ws.red();
-    }
-
-   assert(ws.isClause());
-   const Clause* cl = cl_alloc.ptr(ws.get_offset());
-   return cl->red() || cl->getRemoved();
-}
-
 size_t CNF::cl_size(const Watched& ws) const
 {
     switch(ws.getType()) {
         case watch_binary_t:
             return 2;
-
-        case CMSat::watch_tertiary_t:
-            return 3;
 
         case watch_clause_t: {
             const Clause* cl = cl_alloc.ptr(ws.get_offset());
@@ -295,13 +290,6 @@ string CNF::watched_to_string(Lit otherLit, const Watched& ws) const
             }
             break;
 
-        case CMSat::watch_tertiary_t:
-            ss << otherLit << ", " << ws.lit2() << ", " << ws.lit3();
-            if (ws.red()) {
-                ss << "(red)";
-            }
-            break;
-
         case watch_clause_t: {
             const Clause* cl = cl_alloc.ptr(ws.get_offset());
             for(size_t i = 0; i < cl->size(); i++) {
@@ -328,32 +316,6 @@ bool ClauseSizeSorter::operator () (const ClOffset x, const ClOffset y)
     Clause* cl1 = cl_alloc.ptr(x);
     Clause* cl2 = cl_alloc.ptr(y);
     return (cl1->size() < cl2->size());
-}
-
-void CNF::remove_tri_but_lit1(
-    const Lit lit1
-    , const Lit lit2
-    , const Lit lit3
-    , const bool red
-    , int64_t& timeAvailable
-) {
-    //Remove tri
-    Lit lits[3];
-    lits[0] = lit1;
-    lits[1] = lit2;
-    lits[2] = lit3;
-    std::sort(lits, lits+3);
-    timeAvailable -= watches[lits[0]].size();
-    timeAvailable -= watches[lits[1]].size();
-    timeAvailable -= watches[lits[2]].size();
-    removeTriAllButOne(watches, lit1, lits, red);
-
-    //Update stats for tri
-    if (red) {
-        binTri.redTris--;
-    } else {
-        binTri.irredTris--;
-    }
 }
 
 size_t CNF::mem_used_renumberer() const
@@ -446,32 +408,65 @@ void CNF::load_state(SimpleInFile& f)
 
 void CNF::test_all_clause_attached() const
 {
-#ifdef DEBUG_ATTACH_MORE
+    test_all_clause_attached(longIrredCls);
+    for(const vector<ClOffset>& l: longRedCls) {
+        test_all_clause_attached(l);
+    }
+}
+
+void CNF::test_all_clause_attached(const vector<ClOffset>& offsets) const
+{
     for (vector<ClOffset>::const_iterator
-        it = longIrredCls.begin(), end = longIrredCls.end()
+        it = offsets.begin(), end = offsets.end()
         ; it != end
         ; ++it
     ) {
         assert(normClauseIsAttached(*it));
     }
-#endif
 }
 
 bool CNF::normClauseIsAttached(const ClOffset offset) const
 {
     bool attached = true;
     const Clause& cl = *cl_alloc.ptr(offset);
-    assert(cl.size() > 3);
+    assert(cl.size() > 2);
 
     attached &= findWCl(watches[cl[0]], offset);
     attached &= findWCl(watches[cl[1]], offset);
+
+    bool satisfied = satisfied_cl(cl);
+    uint32_t num_false2 = 0;
+    num_false2 += value(cl[0]) == l_False;
+    num_false2 += value(cl[1]) == l_False;
+    if (!satisfied) {
+        if (num_false2 != 0) {
+            cout << "Clause failed: " << cl << endl;
+            for(Lit l: cl) {
+                cout << "val " << l << " : " << value(l) << endl;
+            }
+            for(const Watched& w: watches[cl[0]]) {
+                cout << "watch " << cl[0] << endl;
+                if (w.isClause() && w.get_offset() == offset) {
+                    cout << "Block lit: " << w.getBlockedLit()
+                    << " val: " << value(w.getBlockedLit()) << endl;
+                }
+            }
+            for(const Watched& w: watches[cl[1]]) {
+                cout << "watch " << cl[1] << endl;
+                if (w.isClause() && w.get_offset() == offset) {
+                    cout << "Block lit: " << w.getBlockedLit()
+                    << " val: " << value(w.getBlockedLit()) << endl;
+                }
+            }
+        }
+        assert(num_false2 == 0 && "propagation was not full??");
+    }
 
     return attached;
 }
 
 void CNF::find_all_attach() const
 {
-#ifdef SLOW_DEBUG
     for (size_t i = 0; i < watches.size(); i++) {
         const Lit lit = Lit::toLit(i);
         for (uint32_t i2 = 0; i2 < watches[lit].size(); i2++) {
@@ -482,6 +477,15 @@ void CNF::find_all_attach() const
             //Get clause
             Clause* cl = cl_alloc.ptr(w.get_offset());
             assert(!cl->freed());
+
+            bool satisfied = satisfied_cl(*cl);
+            if (!satisfied) {
+                if (value(w.getBlockedLit())  == l_True) {
+                    cout << "ERROR: Clause " << *cl << " not satisfied, but its blocked lit, "
+                    << w.getBlockedLit() << " is." << endl;
+                }
+                assert(value(w.getBlockedLit()) != l_True && "Blocked lit is satisfied but clause is NOT!!");
+            }
 
             //Assert watch correctness
             if ((*cl)[0] != lit
@@ -512,7 +516,6 @@ void CNF::find_all_attach() const
     for(auto& lredcls: longRedCls) {
         find_all_attach(lredcls);
     }
-#endif
 }
 
 void CNF::find_all_attach(const vector<ClOffset>& cs) const
@@ -579,8 +582,51 @@ void CNF::check_wrong_attach() const
             }
         }
     }
+    for(watch_subarray_const ws: watches) {
+        check_watchlist(ws);
+    }
 #endif
 }
+
+void CNF::check_watchlist(watch_subarray_const ws) const
+{
+    for(const Watched& w: ws) {
+        if (!w.isClause()) {
+            continue;
+        }
+
+        const ClOffset offs = w.get_offset();
+        const Clause& c = *cl_alloc.ptr(offs);
+        Lit blockedLit = w.getBlockedLit();
+        /*cout << "Clause " << c << " blocked lit:  "<< blockedLit << " val: " << value(blockedLit)
+        << " blocked removed:" << !(varData[blockedLit.var()].removed == Removed::none)
+        << " cl satisfied: " << satisfied_cl(&c)
+        << endl;*/
+        assert(blockedLit.var() < nVars());
+
+        if (varData[blockedLit.var()].removed == Removed::none
+            //0-level FALSE --> clause cleaner removed it from clause, that's OK
+            && value(blockedLit) != l_False
+            && !satisfied_cl(c)
+        ) {
+            bool found = false;
+            for(Lit l: c) {
+                if (l == blockedLit) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                cout << "Did not find non-removed blocked lit " << blockedLit
+                << " val: " << value(blockedLit) << endl
+                << "In clause " << c << endl;
+            }
+            assert(found);
+        }
+
+    }
+}
+
 
 uint64_t CNF::count_lits(
     const vector<ClOffset>& clause_array
@@ -638,12 +684,36 @@ void CNF::print_all_clauses() const
                 cout << "Binary clause part: " << lit << " , " << it2->lit2() << endl;
             } else if (it2->isClause()) {
                 cout << "Normal clause offs " << it2->get_offset() << endl;
-            } else if (it2->isTri()) {
-                cout << "Tri clause:"
-                << lit << " , "
-                << it2->lit2() << " , "
-                << it2->lit3() << endl;
             }
         }
     }
+}
+
+bool CNF::no_marked_clauses() const
+{
+    for(ClOffset offset: longIrredCls) {
+        Clause* cl = cl_alloc.ptr(offset);
+        assert(!cl->stats.marked_clause);
+    }
+
+    for(auto& lredcls: longRedCls) {
+        for(ClOffset offset: lredcls) {
+            Clause* cl = cl_alloc.ptr(offset);
+            assert(!cl->stats.marked_clause);
+        }
+    }
+
+    return true;
+}
+
+void CNF::add_drat(std::ostream* os, bool add_ID) {
+    if (drat)
+        delete drat;
+
+    if (add_ID) {
+        drat = new DratFile<true>(interToOuterMain);
+    } else {
+        drat = new DratFile<false>(interToOuterMain);
+    }
+    drat->setFile(os);
 }

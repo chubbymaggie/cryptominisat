@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef VARREPLACER_H
 #define VARREPLACER_H
@@ -47,23 +48,26 @@ class SCCFinder;
 class VarReplacer
 {
     public:
-        VarReplacer(Solver* solver);
+        explicit VarReplacer(Solver* solver);
         ~VarReplacer();
         void new_var(const uint32_t orig_outer);
         void new_vars(const size_t n);
         void save_on_var_memory();
-        bool replace_if_enough_is_found(const size_t limit = 0, uint64_t* bogoprops = NULL);
-        void print_equivalent_literals(std::ostream *os) const;
+        bool replace_if_enough_is_found(const size_t limit = 0, uint64_t* bogoprops = NULL, bool* replaced = NULL);
+        uint32_t print_equivalent_literals(bool outer_numbering, std::ostream *os = NULL) const;
         void print_some_stats(const double global_cpu_time) const;
         const SCCFinder* get_scc_finder() const;
 
-        void extend_model();
+        void extend_model_already_set();
+        void extend_model_set_undef();
         void extend_model(const uint32_t var);
 
         uint32_t get_var_replaced_with(const uint32_t var) const;
         uint32_t get_var_replaced_with(const Lit lit) const;
         Lit get_lit_replaced_with(Lit lit) const;
         Lit get_lit_replaced_with_outer(Lit lit) const;
+        uint32_t get_var_replaced_with_outer(uint32_t var) const;
+        bool var_is_replacing(const uint32_t var);
 
         vector<uint32_t> get_vars_replacing(uint32_t var) const;
         void updateVars(
@@ -91,7 +95,6 @@ class VarReplacer
             uint64_t zeroDepthAssigns = 0;
             uint64_t actuallyReplacedVars = 0;
             uint64_t removedBinClauses = 0;
-            uint64_t removedTriClauses = 0;
             uint64_t removedLongClauses = 0;
             uint64_t removedLongLits = 0;
             uint64_t bogoprops = 0;
@@ -99,6 +102,8 @@ class VarReplacer
         const Stats& get_stats() const;
         size_t mem_used() const;
         vector<std::pair<Lit, Lit> > get_all_binary_xors_outer() const;
+        vector<uint32_t> get_vars_replacing_others() const;
+        bool get_scc_depth_warning_triggered() const;
 
         void save_state(SimpleOutFile& f) const;
         void load_state(SimpleInFile& f);
@@ -118,6 +123,7 @@ class VarReplacer
         uint32_t get_var_replaced_with_fast(const uint32_t var) const {
             return fast_inter_replace_lookup[var].var();
         }
+        bool replace_xor_clauses();
 
         vector<Lit> ps_tmp;
         bool perform_replace();
@@ -170,20 +176,12 @@ class VarReplacer
             ImplicitTmpStats() :
                 removedRedBin(0)
                 , removedIrredBin(0)
-                , removedRedTri(0)
-                , removedIrredTri(0)
             {
             }
 
             void remove(const Watched& ws)
             {
-                if (ws.isTri()) {
-                    if (ws.red()) {
-                        removedRedTri++;
-                    } else {
-                        removedIrredTri++;
-                    }
-                } else if (ws.isBin()) {
+                if (ws.isBin()) {
                     if (ws.red()) {
                         removedRedBin++;
                     } else {
@@ -201,18 +199,8 @@ class VarReplacer
 
             size_t removedRedBin;
             size_t removedIrredBin;
-            size_t removedRedTri;
-            size_t removedIrredTri;
         };
         ImplicitTmpStats impl_tmp_stats;
-        void updateTri(
-            Watched* i
-            , Watched*& j
-            , const Lit origLit1
-            , const Lit origLit2
-            , Lit lit1
-            , Lit lit2
-        );
         void updateBin(
             Watched* i
             , Watched*& j
@@ -220,14 +208,6 @@ class VarReplacer
             , const Lit origLit2
             , Lit lit1
             , Lit lit2
-        );
-        void newBinClause(
-            Lit origLit1
-            , Lit origLit2
-            , Lit origLit3
-            , Lit lit1
-            , Lit lit2
-            , bool red
         );
         void updateStatsFromImplStats();
 
@@ -285,6 +265,21 @@ inline size_t VarReplacer::getNumTrees() const
     return reverseTable.size();
 }
 
+inline vector<uint32_t> VarReplacer::get_vars_replacing_others() const
+{
+    vector<uint32_t> replacingVars;
+    for(const auto& it: reverseTable) {
+        replacingVars.push_back(it.first);
+    }
+    return replacingVars;
+}
+
+inline bool VarReplacer::var_is_replacing(const uint32_t var)
+{
+    auto it = reverseTable.find(var);
+    return it != reverseTable.end();
+}
+
 inline const VarReplacer::Stats& VarReplacer::get_stats() const
 {
     return globalStats;
@@ -293,6 +288,17 @@ inline const VarReplacer::Stats& VarReplacer::get_stats() const
 inline const SCCFinder* VarReplacer::get_scc_finder() const
 {
     return scc_finder;
+}
+
+inline Lit VarReplacer::get_lit_replaced_with_outer(Lit lit) const
+{
+    Lit lit2 = table[lit.var()] ^ lit.sign();
+    return lit2;
+}
+
+inline uint32_t VarReplacer::get_var_replaced_with_outer(uint32_t var) const
+{
+    return table[var].var();
 }
 
 } //end namespace

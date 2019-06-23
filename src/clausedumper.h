@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef __CLAUSEDUMPER_H__
 #define __CLAUSEDUMPER_H__
@@ -25,7 +26,7 @@
 #include <fstream>
 #include <vector>
 #include <limits>
-#include "cryptominisat4/solvertypesmini.h"
+#include "cryptominisat5/solvertypesmini.h"
 #include "cloffset.h"
 
 using std::vector;
@@ -37,7 +38,7 @@ class Solver;
 class ClauseDumper
 {
 public:
-    ClauseDumper(const Solver* _solver) :
+    explicit ClauseDumper(const Solver* _solver) :
         solver(_solver)
     {}
 
@@ -48,44 +49,41 @@ public:
         }
     }
 
-    void open_file_and_write_unsat(const std::string& fname);
-    void open_file_and_write_sat(const std::string& fname);
+    void write_unsat(std::ostream *out);
+    void dump_irred_clauses_preprocessor(std::ostream *out);
+    void dump_irred_clauses(std::ostream *out);
+    void dump_red_clauses(std::ostream *out);
 
-    void open_file_and_dump_red_clauses(const std::string& redDumpFname);
-    void open_file_and_dump_irred_clauses(const std::string& irredDumpFname);
-    void open_file_and_dump_irred_clauses_preprocessor(const std::string& irredDumpFname);
+    void open_file_and_write_unsat(const std::string& fname);
+    void open_file_and_dump_irred_clauses_preprocessor(const std::string& fname);
+    void open_file_and_dump_irred_clauses(const std::string& fname);
+    void open_file_and_dump_red_clauses(const std::string& fname);
 
 
 private:
     const Solver* solver;
     std::ofstream* outfile = NULL;
 
-    void write_unsat_file();
-    void dump_irred_cls_for_preprocessor(bool backnumber);
     void open_dump_file(const std::string& filename);
-    void dumpBinClauses(
+
+    void dump_irred_cls_for_preprocessor(std::ostream *out, bool outer_number);
+    void dump_bin_cls(std::ostream *out,
         const bool dumpRed
         , const bool dumpIrred
-        , const bool backnumber
+        , const bool outer_number
     );
-    void dumpTriClauses(
-        const bool alsoRed
-        , const bool alsoIrred
-        , const bool backnumber
-    );
-
-    void dumpEquivalentLits();
-    void dumpUnitaryClauses();
-    void dumpRedClauses(const uint32_t maxSize);
-    void dump_clauses(
+    size_t get_preprocessor_num_cls(bool outer_numbering);
+    void dump_red_cls(std::ostream *out, bool outer_numbering);
+    void dump_eq_lits(std::ostream *out, bool outer_numbering);
+    void dump_unit_cls(std::ostream *out, bool outer_numbering);
+    uint32_t dump_blocked_clauses(std::ostream *out, bool outer_numbering);
+    void dump_irred_cls(std::ostream *out, bool outer_numbering);
+    uint32_t dump_component_clauses(std::ostream *out, bool outer_numbering);
+    void dump_vars_appearing_inverted(std::ostream *out, bool outer_numbering);
+    void dump_clauses(std::ostream *out,
         const vector<ClOffset>& cls
-        , size_t max_size
-        , const bool backnumber
+        , const bool outer_number
     );
-
-    void dump_blocked_clauses();
-    void dump_component_clauses();
-    void dumpIrredClauses();
 
     vector<Lit> tmpCl;
 

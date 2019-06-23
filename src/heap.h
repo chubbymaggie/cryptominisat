@@ -22,11 +22,9 @@ OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWA
 #define Glucose_Heap_h
 
 #include "Vec.h"
-#include "minisat_rnd.h"
+#include "MersenneTwister.h"
 
-namespace CMSat{
-
-using namespace CMSat;
+namespace CMSat {
 
 //=================================================================================================
 // A heap implementation with support for decrease/increase key.
@@ -89,7 +87,7 @@ class Heap {
 public:
     Heap(const Comp& c) : lt(c) { }
 
-    int  size      ()          const
+    uint32_t  size      ()          const
     {
         return heap.size();
     }
@@ -106,7 +104,7 @@ public:
         assert(index < (int)heap.size());
         return heap[index];
     }
-    int random_element(MiniSatRnd& rnd)
+    int random_element(MTRand& rnd)
     {
         assert(!heap.empty());
         return heap[rnd.randInt(heap.size()-1)];
@@ -163,14 +161,15 @@ public:
 
 
     // Rebuild the heap from scratch, using the elements in 'ns':
-    void build(vec<uint32_t>& ns)
+    template<typename T>
+    void build(const T& ns)
     {
         for (int i = 0; i < (int)heap.size(); i++) {
             indices[heap[i]] = -1;
         }
         heap.clear();
 
-        for (int i = 0; i < ns.size(); i++) {
+        for (uint32_t i = 0; i < ns.size(); i++) {
             indices[ns[i]] = i;
             heap.push(ns[i]);
         }

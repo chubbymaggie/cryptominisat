@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2018, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "clausedumper.h"
 #include "solver.h"
@@ -27,41 +28,58 @@
 
 using namespace CMSat;
 
-void ClauseDumper::write_unsat_file()
+void ClauseDumper::write_unsat(std::ostream *out)
 {
-    *outfile
+    *out
     << "p cnf 0 1\n"
     << "0\n";
-}
-
-void ClauseDumper::open_file_and_write_sat(const std::string& fname)
-{
-    open_dump_file(fname);
-    *outfile
-    << "p cnf 0 0\n";
-    delete outfile;
-    outfile = NULL;
 }
 
 void ClauseDumper::open_file_and_write_unsat(const std::string& fname)
 {
     open_dump_file(fname);
-    *outfile
-    << "p cnf 0 1\n"
-    << "0\n";
+    write_unsat(outfile);
     delete outfile;
     outfile = NULL;
+}
+
+void ClauseDumper::dump_irred_clauses(std::ostream *out) {
+    if (!solver->okay()) {
+        write_unsat(out);
+    } else {
+        dump_irred_cls(out, true);
+    }
+}
+
+void ClauseDumper::open_file_and_dump_irred_clauses(const string& irredDumpFname)
+{
+    open_dump_file(irredDumpFname);
+    try {
+        dump_irred_clauses(outfile);
+    } catch (std::ifstream::failure& e) {
+        cout
+        << "Error writing clause dump to file: " << e.what()
+        << endl;
+        std::exit(-1);
+    }
+
+    delete outfile;
+    outfile = NULL;
+}
+
+void ClauseDumper::dump_red_clauses(std::ostream *out) {
+        if (!solver->okay()) {
+            write_unsat(out);
+        } else {
+            dump_red_cls(out, true);
+        }
 }
 
 void ClauseDumper::open_file_and_dump_red_clauses(const string& redDumpFname)
 {
     open_dump_file(redDumpFname);
     try {
-        if (!solver->okay()) {
-            write_unsat_file();
-        } else {
-            dumpRedClauses(solver->conf.maxDumpRedsSize);
-        }
+        dump_red_clauses(outfile);
     } catch (std::ifstream::failure& e) {
         cout
         << "Error writing clause dump to file: " << e.what()
@@ -72,44 +90,40 @@ void ClauseDumper::open_file_and_dump_red_clauses(const string& redDumpFname)
     outfile = NULL;
 }
 
-void ClauseDumper::open_file_and_dump_irred_clauses(const string& irredDumpFname)
-{
-    open_dump_file(irredDumpFname);
-
-    try {
-        if (!solver->okay()) {
-            write_unsat_file();
-        } else {
-            dumpIrredClauses();
-        }
-    } catch (std::ifstream::failure& e) {
-        cout
-        << "Error writing clause dump to file: " << e.what()
-        << endl;
-        std::exit(-1);
+size_t ClauseDumper::get_preprocessor_num_cls(bool outer_numbering) {
+    size_t num_cls = 0;
+    num_cls += solver->longIrredCls.size();
+    num_cls += solver->binTri.irredBins;
+    if (!outer_numbering) {
+        vector<Lit> units = solver->get_toplevel_units_internal(false);
+        num_cls += units.size();
+    } else {
+        vector<Lit> units = solver->get_zero_assigned_lits();
+        num_cls += units.size();
     }
-    delete outfile;
-    outfile = NULL;
+    num_cls += solver->undef_must_set_vars.size();
+    num_cls += solver->varReplacer->print_equivalent_literals(outer_numbering)*2;
+
+    return num_cls;
+}
+
+void ClauseDumper::dump_irred_clauses_preprocessor(std::ostream *out) {
+    if (!solver->okay()) {
+        write_unsat(out);
+    } else {
+        *out
+        << "p cnf " << solver->nVars()
+        << " " << get_preprocessor_num_cls(false) << "\n";
+
+        dump_irred_cls_for_preprocessor(out, false);
+    }
 }
 
 void ClauseDumper::open_file_and_dump_irred_clauses_preprocessor(const string& irredDumpFname)
 {
     open_dump_file(irredDumpFname);
-
     try {
-        if (!solver->okay()) {
-            write_unsat_file();
-        } else {
-            size_t num_cls = 0;
-            num_cls += solver->longIrredCls.size();
-            num_cls += solver->binTri.irredBins;
-            num_cls += solver->binTri.irredTris;
-
-            *outfile
-            << "p cnf " << solver->nVars() << " " << num_cls << "\n";
-
-            dump_irred_cls_for_preprocessor(false);
-        }
+        dump_irred_clauses_preprocessor(outfile);
     } catch (std::ifstream::failure& e) {
         cout
         << "Error writing clause dump to file: " << e.what()
@@ -118,6 +132,82 @@ void ClauseDumper::open_file_and_dump_irred_clauses_preprocessor(const string& i
     }
     delete outfile;
     outfile = NULL;
+}
+
+void ClauseDumper::dump_red_cls(std::ostream *out, bool outer_numbering)
+{
+    if (solver->get_num_bva_vars() > 0) {
+        std::cerr << "ERROR: cannot make meaningful dump with BVA turned on." << endl;
+        exit(-1);
+    }
+
+    *out << "c --- c red bin clauses" << endl;
+    dump_bin_cls(out, true, false, outer_numbering);
+
+    *out << "c ----- red long cls locked in the DB" << endl;
+    dump_clauses(out, solver->longRedCls[0], outer_numbering);
+
+    dump_eq_lits(out, outer_numbering);
+}
+
+void ClauseDumper::dump_irred_cls(std::ostream *out, bool outer_numbering)
+{
+    if (solver->get_num_bva_vars() > 0) {
+        std::cerr << "ERROR: cannot make meaningful dump with BVA turned on." << endl;
+        exit(-1);
+    }
+
+    size_t num_cls = get_preprocessor_num_cls(outer_numbering);
+    num_cls += dump_blocked_clauses(NULL, outer_numbering);
+    num_cls += dump_component_clauses(NULL, outer_numbering);
+
+    *out
+    << "p cnf " << solver->nVarsOutside()
+    << " " << num_cls << "\n";
+
+    dump_irred_cls_for_preprocessor(out, outer_numbering);
+
+    *out << "c ------------------ previously eliminated variables" << endl;
+    dump_blocked_clauses(out, outer_numbering);
+
+    *out << "c ---------- clauses in components" << endl;
+    dump_component_clauses(out, outer_numbering);
+}
+
+void ClauseDumper::dump_unit_cls(std::ostream *out, bool outer_numbering)
+{
+    *out << "c --------- unit clauses" << endl;
+    if (outer_numbering) {
+        //'trail' cannot be trusted between 0....size()
+        vector<Lit> lits = solver->get_zero_assigned_lits();
+        for(Lit lit: lits) {
+            *out << lit << " 0\n";
+        }
+    } else {
+        vector<Lit> units = solver->get_toplevel_units_internal(false);
+        for(Lit l: units) {
+            *out << l << " 0" << "\n";
+        }
+    }
+}
+
+uint32_t ClauseDumper::dump_blocked_clauses(std::ostream *out, bool outer_numbering) {
+    assert(outer_numbering);
+    uint32_t num_cls = 0;
+    if (solver->conf.perform_occur_based_simp) {
+        num_cls = solver->occsimplifier->dump_blocked_clauses(out);
+    }
+    return num_cls;
+}
+
+uint32_t ClauseDumper::dump_component_clauses(std::ostream *out, bool outer_numbering)
+{
+    assert(outer_numbering);
+    uint32_t num_cls = 0;
+    if (solver->compHandler) {
+        num_cls = solver->compHandler->dump_removed_clauses(out);
+    }
+    return num_cls;
 }
 
 void ClauseDumper::open_dump_file(const std::string& filename)
@@ -138,12 +228,11 @@ void ClauseDumper::open_dump_file(const std::string& filename)
     outfile = f;
 }
 
-
-
-void ClauseDumper::dumpBinClauses(
+void ClauseDumper::dump_bin_cls(
+    std::ostream *out,
     const bool dumpRed
     , const bool dumpIrred
-    , const bool backnumber
+    , const bool outer_number
 ) {
     size_t wsLit = 0;
     for (watch_array::const_iterator
@@ -169,13 +258,12 @@ void ClauseDumper::dumpBinClauses(
                     tmpCl.clear();
                     tmpCl.push_back(lit);
                     tmpCl.push_back(it2->lit2());
-                    if (backnumber) {
+                    if (outer_number) {
                         tmpCl[0] = solver->map_inter_to_outer(tmpCl[0]);
                         tmpCl[1] = solver->map_inter_to_outer(tmpCl[1]);
-                        std::sort(tmpCl.begin(), tmpCl.end());
                     }
 
-                    *outfile
+                    *out
                     << tmpCl[0] << " "
                     << tmpCl[1]
                     << " 0\n";
@@ -185,126 +273,16 @@ void ClauseDumper::dumpBinClauses(
     }
 }
 
-void ClauseDumper::dumpTriClauses(
-    const bool alsoRed
-    , const bool alsoIrred
-    , const bool backnumber
-) {
-    uint32_t wsLit = 0;
-    for (watch_array::const_iterator
-        it = solver->watches.begin(), end = solver->watches.end()
-        ; it != end
-        ; ++it, wsLit++
-    ) {
-        Lit lit = Lit::toLit(wsLit);
-        watch_subarray_const ws = *it;
-        for (const Watched* it2 = ws.begin(), *end2 = ws.end()
-            ; it2 != end2
-            ; it2++
-        ) {
-            //Only one instance of tri clause
-            if (it2->isTri() && lit < it2->lit2()) {
-                bool toDump = false;
-                if (it2->red() && alsoRed) toDump = true;
-                if (!it2->red() && alsoIrred) toDump = true;
-
-                if (toDump) {
-                    tmpCl.clear();
-                    tmpCl.push_back(lit);
-                    tmpCl.push_back(it2->lit2());
-                    tmpCl.push_back(it2->lit3());
-                    if (backnumber) {
-                        tmpCl[0] = solver->map_inter_to_outer(tmpCl[0]);
-                        tmpCl[1] = solver->map_inter_to_outer(tmpCl[1]);
-                        tmpCl[2] = solver->map_inter_to_outer(tmpCl[2]);
-                        std::sort(tmpCl.begin(), tmpCl.end());
-                    }
-
-                    *outfile
-                    << tmpCl[0] << " "
-                    << tmpCl[1] << " "
-                    << tmpCl[2]
-                    << " 0\n";
-                }
-            }
-        }
-    }
-}
-
-
-void ClauseDumper::dumpEquivalentLits()
+void ClauseDumper::dump_eq_lits(std::ostream *out, bool outer_numbering)
 {
-    *outfile
-    << "c " << endl
-    << "c ---------------------------------------" << endl
-    << "c equivalent literals" << endl
-    << "c ---------------------------------------" << endl;
-
-    solver->varReplacer->print_equivalent_literals(outfile);
-}
-
-void ClauseDumper::dumpUnitaryClauses()
-{
-    *outfile
-    << "c " << endl
-    << "c ---------" << endl
-    << "c unitaries" << endl
-    << "c ---------" << endl;
-
-    //'trail' cannot be trusted between 0....size()
-    vector<Lit> lits = solver->get_zero_assigned_lits();
-    for(const Lit lit: lits) {
-        *outfile << lit << " 0\n";
-    }
-}
-
-
-void ClauseDumper::dumpRedClauses(
-    const uint32_t maxSize
-) {
-    if (solver->get_num_bva_vars() > 0) {
-        std::cerr << "ERROR: cannot make meaningful dump with BVA turned on." << endl;
-        exit(-1);
-    }
-
-    dumpUnitaryClauses();
-
-    *outfile
-    << "c " << endl
-    << "c ---------------------------------" << endl
-    << "c redundant binary clauses (extracted from watchlists)" << endl
-    << "c ---------------------------------" << endl;
-    if (maxSize >= 2) {
-        dumpBinClauses(true, false, true);
-    }
-
-    *outfile
-    << "c " << endl
-    << "c ---------------------------------" << endl
-    << "c redundant tertiary clauses (extracted from watchlists)" << endl
-    << "c ---------------------------------" << endl;
-    if (maxSize >= 3) {
-        dumpTriClauses(true, false, true);
-    }
-
-    if (maxSize >= 2) {
-        dumpEquivalentLits();
-    }
-
-    *outfile
-    << "c " << endl
-    << "c --------------------" << endl
-    << "c redundant long clauses" << endl
-    << "c --------------------" << endl;
-    for(auto& lredcls: solver->longRedCls) {
-        dump_clauses(lredcls, maxSize, true);
-    }
+    *out << "c ------------ equivalent literals" << endl;
+    solver->varReplacer->print_equivalent_literals(outer_numbering, out);
 }
 
 void ClauseDumper::dump_clauses(
+    std::ostream *out,
     const vector<ClOffset>& cls
-    , size_t max_size
-    , const bool backnumber
+    , const bool outer_numbering
 ) {
     for(vector<ClOffset>::const_iterator
         it = cls.begin(), end = cls.end()
@@ -312,77 +290,44 @@ void ClauseDumper::dump_clauses(
         ; ++it
     ) {
         Clause* cl = solver->cl_alloc.ptr(*it);
-        if (cl->size() <= max_size) {
-            if (backnumber) {
-                *outfile << sortLits(solver->clauseBackNumbered(*cl)) << " 0\n";
-            } else {
-                *outfile << *cl << " 0\n";
-            }
+        if (outer_numbering) {
+            *out << solver->clause_outer_numbered(*cl) << " 0\n";
+        } else {
+            *out << *cl << " 0\n";
         }
     }
 }
 
-void ClauseDumper::dump_blocked_clauses()
+void ClauseDumper::dump_vars_appearing_inverted(std::ostream *out, bool outer_numbering)
 {
-    if (solver->conf.perform_occur_based_simp) {
-        solver->occsimplifier->dump_blocked_clauses(outfile);
+    *out << "c ------------ vars appearing inverted in cls" << endl;
+    for(size_t i = 0; i < solver->undef_must_set_vars.size(); i++) {
+        if (!solver->undef_must_set_vars[i] ||
+            solver->map_outer_to_inter(i) >= solver->nVars() ||
+            solver->value(solver->map_outer_to_inter(i)) != l_Undef
+        ) {
+            continue;
+        }
+
+        Lit l = Lit(i, false);
+        if (!outer_numbering) {
+            l = solver->map_outer_to_inter(l);
+        }
+        *out << l << " " << ~l << " 0" << "\n";
     }
 }
 
-void ClauseDumper::dump_component_clauses()
+void ClauseDumper::dump_irred_cls_for_preprocessor(std::ostream *out, const bool outer_numbering)
 {
-    if (solver->compHandler) {
-        solver->compHandler->dump_removed_clauses(outfile);
-    }
-}
+    dump_unit_cls(out, outer_numbering);
 
-void ClauseDumper::dump_irred_cls_for_preprocessor(const bool backnumber)
-{
-    *outfile
-    << "c " << endl
-    << "c ---------------" << endl
-    << "c binary clauses" << endl
-    << "c ---------------" << endl;
-    dumpBinClauses(false, true, backnumber);
+    dump_vars_appearing_inverted(out, outer_numbering);
 
-    *outfile
-    << "c " << endl
-    << "c ---------------" << endl
-    << "c tertiary clauses" << endl
-    << "c ---------------" << endl;
-    dumpTriClauses(false, true, backnumber);
+    *out << "c -------- irred bin cls" << endl;
+    dump_bin_cls(out, false, true, outer_numbering);
 
-    *outfile
-    << "c " << endl
-    << "c ---------------" << endl
-    << "c long clauses" << endl
-    << "c ---------------" << endl;
-    dump_clauses(solver->longIrredCls, std::numeric_limits<size_t>::max(), backnumber);
-}
+    *out << "c -------- irred long cls" << endl;
+    dump_clauses(out, solver->longIrredCls, outer_numbering);
 
-void ClauseDumper::dumpIrredClauses()
-{
-    if (solver->get_num_bva_vars() > 0) {
-        std::cerr << "ERROR: cannot make meaningful dump with BVA turned on." << endl;
-        exit(-1);
-    }
-
-    dumpUnitaryClauses();
-    dumpEquivalentLits();
-
-    dump_irred_cls_for_preprocessor(true);
-
-    *outfile
-    << "c " << endl
-    << "c -------------------------------" << endl
-    << "c previously eliminated variables" << endl
-    << "c -------------------------------" << endl;
-    dump_blocked_clauses();
-
-    *outfile
-    << "c " << endl
-    << "c ---------------" << endl
-    << "c clauses in components" << endl
-    << "c ---------------" << endl;
-    dump_component_clauses();
+    dump_eq_lits(out, outer_numbering);
 }

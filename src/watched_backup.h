@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef WATCHED_H
 #define WATCHED_H
@@ -36,7 +37,6 @@ namespace CMSat {
 enum WatchType {
     watch_clause_t = 0
     , watch_binary_t = 1
-    , watch_tertiary_t = 2
     , watch_idx_t = 3
 };
 
@@ -84,31 +84,12 @@ class Watched {
         }
 
         /**
-        @brief Constructor for a 3-long clause
-        */
-        Watched(const Lit lit1, const Lit lit2, const bool red) :
-            data1(lit1.toInt())
-            , data2(lit2.toInt())
-            , type(watch_tertiary_t)
-            , _red(red)
-        {
-        }
-
-        /**
         @brief Constructor for an Index value
         */
         Watched(const uint32_t idx) :
             data1(idx)
             , type(watch_idx_t)
         {
-        }
-
-        void setNormOffset(const ClOffset offset)
-        {
-            #ifdef DEBUG_WATCHED
-            assert(type == watch_clause_t);
-            #endif
-            data2 = offset;
         }
 
         /**
@@ -138,11 +119,6 @@ class Watched {
             return (type == watch_clause_t);
         }
 
-        bool isTri() const
-        {
-            return (type == watch_tertiary_t);
-        }
-
         bool isIdx() const
         {
             return (type == watch_idx_t);
@@ -162,7 +138,7 @@ class Watched {
         Lit lit2() const
         {
             #ifdef DEBUG_WATCHED
-            assert(isBin() || isTri());
+            assert(isBin());
             #endif
             return Lit::toLit(data1);
         }
@@ -173,7 +149,7 @@ class Watched {
         void setLit2(const Lit lit)
         {
             #ifdef DEBUG_WATCHED
-            assert(isBin() || isTri());
+            assert(isBin());
             #endif
             data1 = lit.toInt();
         }
@@ -181,7 +157,7 @@ class Watched {
         bool red() const
         {
             #ifdef DEBUG_WATCHED
-            assert(isBin() || isTri());
+            assert(isBin());
             #endif
             return _red;
         }
@@ -193,30 +169,11 @@ class Watched {
         )
         {
             #ifdef DEBUG_WATCHED
-            assert(isBin() || isTri());
+            assert(isBin());
             assert(red());
             assert(toSet == false);
             #endif
             _red = true;
-        }
-
-        /**
-        @brief Get the 3rd literal of a 3-long clause
-        */
-        Lit lit3() const
-        {
-            #ifdef DEBUG_WATCHED
-            assert(isTri());
-            #endif
-            return Lit::toLit(data2);
-        }
-
-        void setLit3(const Lit lit2)
-        {
-            #ifdef DEBUG_WATCHED
-            assert(isTri());
-            #endif
-            data2 = lit2.toInt();
         }
 
         void mark_bin_cl()
@@ -331,12 +288,6 @@ inline std::ostream& operator<<(std::ostream& os, const Watched& ws)
         os << "Bin lit " << ws.lit2() << " (red: " << ws.red() << " )";
     }
 
-    if (ws.isTri()) {
-        os << "Tri lits "
-        << ws.lit2() << ", " << ws.lit3()
-        << " (red: " << ws.red() << " )";
-    }
-
     return os;
 }
 
@@ -374,29 +325,15 @@ struct WatchSorterBinTriLong {
                 //B is clause, A is NOT a clause. So A is better than B.
                 return true;
             }
-            //Now nothing is clause
+
+            //Both are BIN
+            assert(a.isBin());
+            assert(b.isBin());
 
             if (a.lit2() != b.lit2()) {
                 return a.lit2() < b.lit2();
             }
-            if (a.isBin() && b.isTri()) return true;
-            if (a.isTri() && b.isBin()) return false;
-            //At this point either both are BIN or both are TRI
 
-            //Both are BIN
-            if (a.isBin()) {
-                assert(b.isBin());
-                if (a.red() != b.red()) {
-                    return !a.red();
-                }
-                return false;
-            }
-
-            //Both are Tri
-            assert(a.isTri() && b.isTri());
-            if (a.lit3() != b.lit3()) {
-                return a.lit3() < b.lit3();
-            }
             if (a.red() != b.red()) {
                 return !a.red();
             }

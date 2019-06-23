@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef SCCFINDER_H
 #define SCCFINDER_H
@@ -32,7 +33,7 @@ class Solver;
 
 class SCCFinder {
     public:
-        SCCFinder(Solver* _solver);
+        explicit SCCFinder(Solver* _solver);
         bool performSCC(uint64_t* bogoprops_given = NULL);
         const std::set<BinaryXor>& get_binxors() const;
         size_t get_num_binxors_found() const;
@@ -97,10 +98,13 @@ class SCCFinder {
 
         const Stats& get_stats() const;
         size_t mem_used() const;
+        bool depth_warning_triggered() const;
 
     private:
         void tarjan(const uint32_t vertex);
+        bool depth_warning_issued;
         void doit(const Lit lit, const uint32_t vertex);
+        void add_bin_xor_in_tmp();
 
         //temporaries
         uint32_t globalIndex;
@@ -109,6 +113,7 @@ class SCCFinder {
         std::stack<uint32_t, vector<uint32_t> > stack;
         vector<char> stackIndicator;
         vector<uint32_t> tmp;
+        uint32_t depth;
 
         Solver* solver;
         std::set<BinaryXor> binxors;
@@ -122,10 +127,16 @@ inline void SCCFinder::doit(const Lit lit, const uint32_t vertex) {
     // Was successor v' visited?
     if (index[lit.toInt()] ==  std::numeric_limits<uint32_t>::max()) {
         tarjan(lit.toInt());
+        depth--;
         lowlink[vertex] = std::min(lowlink[vertex], lowlink[lit.toInt()]);
     } else if (stackIndicator[lit.toInt()])  {
         lowlink[vertex] = std::min(lowlink[vertex], lowlink[lit.toInt()]);
     }
+}
+
+inline bool SCCFinder::depth_warning_triggered() const
+{
+    return depth_warning_issued;
 }
 
 inline const SCCFinder::Stats& SCCFinder::get_stats() const

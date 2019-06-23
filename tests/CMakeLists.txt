@@ -1,31 +1,37 @@
-# -----------------------------------------------------------------------------
-# Check we can find Python and the lit tool
-# -----------------------------------------------------------------------------
-find_package(PythonInterp REQUIRED)
-mark_as_advanced(CLEAR PYTHON_EXECUTABLE) # Make visible in cmake-gui/ccmake
+# Copyright (c) 2017, Mate Soos
+#
+# Permission is hereby granted, free of charge, to any person obtaining a copy
+# of this software and associated documentation files (the "Software"), to deal
+# in the Software without restriction, including without limitation the rights
+# to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+# copies of the Software, and to permit persons to whom the Software is
+# furnished to do so, subject to the following conditions:
+#
+# The above copyright notice and this permission notice shall be included in
+# all copies or substantial portions of the Software.
+#
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+# FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+# AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+# LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+# OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+# THE SOFTWARE.
 
-if(NOT PYTHONINTERP_FOUND)
-    message(FATAL_ERROR "Python cannot be found. Please install it or disable testing.")
-endif()
 
-find_program(LIT_TOOL
-    lit
-    DOC "Path to lit tool"
+set (LIT_TOOL "${PYTHON_EXECUTABLE} -m lit.main")
+execute_process(
+    COMMAND "${PYTHON_EXECUTABLE}" "-m" "lit.main" "--version"
+    OUTPUT_VARIABLE LIT_VER_OUT
+    ERROR_VARIABLE  LIT_VER_ERR
+    RESULT_VARIABLE RES
 )
 
-if(NOT LIT_TOOL)
-    message(FATAL_ERROR "Could not find 'lit' tool. You need to install it by e.g. 'pip install lit' If it's already installed, set LIT_TOOL to the full path for lit")
-endif()
-
-# Checking absolute path because if(EXISTS ...) behaviour only well
-# defined if path is absolute
-IF(NOT IS_ABSOLUTE "${LIT_TOOL}")
-    message(FATAL_ERROR "LIT_TOOL must be set to an absolute PATH")
-endif()
-
-if(NOT EXISTS "${LIT_TOOL}")
-    # Can happen if users environment changes after initial configure
-    message(FATAL_ERROR "LIT_TOOL is set but the path does not seem to exist. Try deleting the LIT_TOOL cache variable and reconfiguring")
+if(NOT("${RES}" STREQUAL "0"))
+    message(STATUS "Output of LIT stdout: '${LIT_VER_OUT}'")
+    message(STATUS "Output of LIT stderr: '${LIT_VER_ERR}'")
+    message(STATUS "LIT result val is: '${RES}'")
+    message(FATAL_ERROR "Could not find 'lit' tool for Python executable ${PYTHON_EXECUTABLE}. You need to install it for this Python version by running '${PYTHON_EXECUTABLE} -m pip install lit'. If it's already installed, set LIT_TOOL to the full path for lit")
 endif()
 
 set(LIT_ARGS -v CACHE STRING "Arguments to pass to lit")
@@ -48,33 +54,30 @@ add_subdirectory(${GTEST_PREFIX} gtest)
 set(GTEST_BOTH_LIBRARIES gtest gtest_main)
 
 include_directories(${GTEST_PREFIX}/include)
+add_definitions( -DCMS_TESTING_ENABLED )
 
 # Add handy macros/functions
 include(AddSTPGTest)
 include(AddGTestSuite)
 
 # -----------------------------------------------------------------------------
-# Tests that drive cryptominisat by using cnf files (e.g. smt2, smt and cvc files)
 # -----------------------------------------------------------------------------
 
-option(TEST_CNF_FILES
-       "Enable tests that use cnf files to drive cryptominisat"
-       ON
-      )
-
-if(TEST_CNF_FILES)
+if(NOT ONLY_SIMPLE)
+    # Tests that drive cryptominisat by using cnf files (e.g. smt2, smt and cvc files)
     add_subdirectory(${PROJECT_SOURCE_DIR}/tests/cnf-files)
+
+    # Needed for fuzz-testing
+    add_subdirectory(${PROJECT_SOURCE_DIR}/utils/cnf-utils cnf-utils)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/utils/drat-trim drat-trim)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/utils/sha1-sat sha1-sat)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/utils/minisat minisat)
 endif()
 
-
-# -----------------------------------------------------------------------------
-
-add_subdirectory(${PROJECT_SOURCE_DIR}/utils/cnf-utils cnf-utils)
-add_subdirectory(${PROJECT_SOURCE_DIR}/utils/sha1-sat sha1-sat)
-
-
-if (PYTHON_OK AND NOT STATS)
-    # add_subdirectory(swig)
+add_sanitize_flags()
+if (PYTHON_EXECUTABLE AND ZLIB_FOUND AND NOT STATS_NEEDED AND NOT ONLY_SIMPLE)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/utils/minisat_only_elim_and_subsume minisat_only_elim_and_subsume)
+    add_subdirectory(simp-checks)
 endif()
 
 
@@ -82,14 +85,15 @@ include_directories(
     ${PROJECT_SOURCE_DIR}
 )
 include_directories(
-    ${PROJECT_BINARY_DIR}/cmsat4-src
+    ${PROJECT_BINARY_DIR}/cmsat5-src
 )
 
+# README test
 add_executable(readme_test
     readme_test.cpp
 )
 target_link_libraries(readme_test
-    libcryptominisat4
+    cryptominisat5
 )
 add_test (
     NAME readme_test
@@ -97,7 +101,53 @@ add_test (
     WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
 )
 
+# C bindings test
+if (NOT SANITIZE)
+    add_executable(c_test
+        c_test.c
+    )
+    target_link_libraries(c_test
+        cryptominisat5
+    )
+    add_test (
+        NAME c_test
+        COMMAND c_test
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    )
+endif()
+
+# Multisol test
+add_executable(multisol_test
+    multisol_test.cpp
+)
+target_link_libraries(multisol_test
+    cryptominisat5
+)
+add_test (
+    NAME multisol_test
+    COMMAND multisol_test
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+
+if (IPASIR)
+    add_executable(ipasir_test
+        ipasir_test.cpp
+    )
+    target_link_libraries(ipasir_test
+        ${GTEST_BOTH_LIBRARIES}
+        ipasircryptominisat5
+    )
+    add_test (
+        NAME ipasir_test
+        COMMAND ipasir_test
+        WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    )
+endif()
+
+#google test harness
 set (MY_TESTS
+#     clause_alloc_test
     basic_test
     assump_test
     heap_test
@@ -108,18 +158,22 @@ set (MY_TESTS
     clause_cleaner_test
     probe_test
     distiller_all_with_all_test
-    str_impl_w_impl_stamp
     distill_long_with_implicit_test
     subsume_impl_test
     comp_find_test
     intree_test
     xorfinder_test
     comphandler_test
+    dump_test
+    searcher_test
+    solver_test
+    ternary_resolve_test
+#    undefine_test
 )
 
 if (USE_GAUSS)
     set (MY_TESTS ${MY_TESTS}
-        gauss_test
+        # gauss_test
         matrixfinder_test
     )
 endif()
@@ -128,13 +182,9 @@ foreach(F ${MY_TESTS})
     add_executable(${F}
         ${F}.cpp
     )
-    if (STATICCOMPILE)
-        set_target_properties(${F} PROPERTIES LINK_SEARCH_END_STATIC 1)
-        set_target_properties(${F} PROPERTIES LINK_SEARCH_START_STATIC 0)
-    endif (STATICCOMPILE)
     target_link_libraries(${F}
+        cryptominisat5
         ${GTEST_BOTH_LIBRARIES}
-        libcryptominisat4
     )
     add_test (
         NAME ${F}
@@ -142,15 +192,3 @@ foreach(F ${MY_TESTS})
         WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
     )
 endforeach()
-
-
-# This test is not stable enough, depends on CPU speed
-# if (NOT SLOW_DEBUG)
-#     add_executable(library_speed_test
-#         library_speed_test.cpp
-#     )
-#
-#     target_link_libraries(library_speed_test
-#         libcryptominisat4
-#     )
-# endif()

@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "comphandler.h"
 #include "compfinder.h"
@@ -30,7 +31,7 @@
 #include <iostream>
 #include <cassert>
 #include <iomanip>
-#include "cryptominisat4/cryptominisat.h"
+#include "cryptominisat5/cryptominisat.h"
 #include "sqlstats.h"
 
 using namespace CMSat;
@@ -63,7 +64,7 @@ void CompHandler::new_var(const uint32_t orig_outer)
 
 void CompHandler::new_vars(size_t n)
 {
-    savedState.resize(savedState.size()+n, l_Undef);
+    savedState.insert(savedState.end(), n, l_Undef);
     assert(savedState.size() == solver->nVarsOuter());
 }
 
@@ -99,7 +100,7 @@ void CompHandler::createRenumbering(const vector<uint32_t>& vars)
 bool CompHandler::assumpsInsideComponent(const vector<uint32_t>& vars)
 {
     for(uint32_t var: vars) {
-        if (solver->var_inside_assumptions(var)) {
+        if (solver->var_inside_assumptions(var) != l_Undef) {
             return true;
         }
     }
@@ -132,6 +133,7 @@ vector<pair<uint32_t, uint32_t> > CompHandler::get_component_sizes() const
 
 bool CompHandler::handle()
 {
+    assert(solver->conf.sampling_vars == NULL && "Cannot handle components when sampling vars is set");
     assert(solver->okay());
     double myTime = cpuTime();
 
@@ -156,11 +158,13 @@ bool CompHandler::handle()
 
         delete compFinder;
         compFinder = NULL;
-        return solver->ok;
+        return solver->okay();
     }
 
-    solver->clear_gauss();
     solver->xorclauses.clear();
+    #ifdef USE_GAUSS
+    solver->clearEnGaussMatrixes();
+    #endif
     map<uint32_t, vector<uint32_t> > reverseTable = compFinder->getReverseTable();
     assert(num_comps == compFinder->getReverseTable().size());
     vector<pair<uint32_t, uint32_t> > sizes = get_component_sizes();
@@ -182,7 +186,7 @@ bool CompHandler::handle()
         delete compFinder;
         compFinder = NULL;
 
-        return solver->ok;
+        return solver->okay();
     }
 
     const double time_used = cpuTime() - myTime;
@@ -207,7 +211,7 @@ bool CompHandler::handle()
 
     delete compFinder;
     compFinder = NULL;
-    return solver->ok;
+    return solver->okay();
 }
 
 bool CompHandler::try_to_solve_component(
@@ -220,7 +224,9 @@ bool CompHandler::try_to_solve_component(
         assert(solver->value(var) == l_Undef);
     }
 
-    if (vars_orig.size() > 100ULL*1000ULL) {
+    if (vars_orig.size() > 100ULL*1000ULL*
+            solver->conf.var_and_mem_out_mult
+       ) {
         //There too many variables -- don't create a sub-solver
         //I'm afraid that we will memory-out
 
@@ -240,7 +246,7 @@ bool CompHandler::solve_component(
     , const vector<uint32_t>& vars_orig
     , const size_t num_comps
 ) {
-    assert(!solver->drat->enabled());
+    assert(! (solver->drat->enabled() || solver->conf.simulate_drat) );
     vector<uint32_t> vars(vars_orig);
     components_solved++;
 
@@ -248,7 +254,7 @@ bool CompHandler::solve_component(
     std::sort(vars.begin(), vars.end());
     createRenumbering(vars);
 
-    if (solver->conf.verbosity >= 1 && num_comps < 20) {
+    if (solver->conf.verbosity && num_comps < 20) {
         cout
         << "c [comp] Solving component " << comp_at
         << " num vars: " << vars.size()
@@ -274,7 +280,7 @@ bool CompHandler::solve_component(
     const lbool status = newSolver.solve();
     //Out of time
     if (status == l_Undef) {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
             << "c [comp] subcomponent returned l_Undef -- timeout or interrupt."
             << endl;
@@ -285,7 +291,7 @@ bool CompHandler::solve_component(
 
     if (status == l_False) {
         solver->ok = false;
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
             << "c [comp] The component is UNSAT -> problem is UNSAT"
             << endl;
@@ -297,7 +303,7 @@ bool CompHandler::solve_component(
     save_solution_to_savedstate(&newSolver, vars, comp);
     move_decision_level_zero_vars_here(&newSolver);
 
-    if (solver->conf.verbosity >= 1 && num_comps < 20) {
+    if (solver->conf.verbosity && num_comps < 20) {
         cout
         << "c [comp] component " << comp_at
         << " ======================================="
@@ -317,6 +323,9 @@ void CompHandler::check_local_vardata_sanity()
         if (savedState[outerVar] != l_Undef) {
             assert(solver->varData[interVar].removed == Removed::decomposed);
             assert(solver->value(interVar) == l_Undef || solver->varData[interVar].level == 0);
+        }
+
+        if (solver->varData[interVar].removed == Removed::decomposed) {
             num_vars_removed_check++;
         }
     }
@@ -386,6 +395,7 @@ SolverConf CompHandler::configureNewSolver(
 ) const {
     SolverConf conf(solver->conf);
     conf.origSeed = solver->mtrand.randInt();
+    conf.sampling_vars = NULL;
     if (numVars < 60) {
         conf.do_simplify_problem = false;
         conf.doStamp = false;
@@ -394,6 +404,15 @@ SolverConf CompHandler::configureNewSolver(
         conf.otfHyperbin = false;
         conf.verbosity = std::min(solver->conf.verbosity, 0);
     }
+
+    //Otherwise issues are:
+    // * variable elimination assumes some of these variables are set
+    //   (in orig instance)
+    //
+    // * every var replaced with var replacement would need to be set anyway
+    //
+    // Let's not complicate all of this.
+    conf.greedy_undef = false;
 
     //To small, don't clogger up the screen
     if (numVars < 20 && solver->conf.verbosity < 3) {
@@ -576,100 +595,6 @@ void CompHandler::move_binary_clause(
     }
 }
 
-void CompHandler::remove_tri_except_for_lit1(
-    const Lit lit
-    , const Lit lit2
-    , const Lit lit3
-) {
-    //We need it sorted, because that's how we know what order
-    //it is in the Watched()
-    tmp_lits = {lit, lit2, lit3};
-    std::sort(tmp_lits.begin(), tmp_lits.end());
-
-    //Remove only 2, the remaining gets removed by not copying it over
-    if (tmp_lits[0] != lit) {
-        removeWTri(solver->watches, tmp_lits[0], tmp_lits[1], tmp_lits[2], true);
-    }
-    if (tmp_lits[1] != lit) {
-        removeWTri(solver->watches, tmp_lits[1], tmp_lits[0], tmp_lits[2], true);
-    }
-    if (tmp_lits[2] != lit) {
-        removeWTri(solver->watches, tmp_lits[2], tmp_lits[0], tmp_lits[1], true);
-    }
-
-    //Update stats
-    solver->binTri.redTris--;
-}
-
-void CompHandler::move_tri_clause(
-    SATSolver* newSolver
-    , const uint32_t comp
-    ,  Watched *i
-    , const Lit lit
-) {
-    const Lit lit2 = i->lit2();
-    const Lit lit3 = i->lit3();
-
-    //Unless redundant, cannot be in 2 comps at once
-    assert((compFinder->getVarComp(lit.var()) == comp
-                && compFinder->getVarComp(lit2.var()) == comp
-                && compFinder->getVarComp(lit3.var()) == comp
-           ) || i->red()
-    );
-
-    //If it's redundant and the lits are in different comps, remove it.
-    if (compFinder->getVarComp(lit.var()) != comp
-        || compFinder->getVarComp(lit2.var()) != comp
-        || compFinder->getVarComp(lit3.var()) != comp
-    ) {
-        assert(i->red());
-
-        //The way we go through this, it's definitely going to be
-        //either lit2 or lit3, not lit, that's in the other comp
-        assert(compFinder->getVarComp(lit2.var()) != comp
-            || compFinder->getVarComp(lit3.var()) != comp
-        );
-
-        remove_tri_except_for_lit1(lit, lit2, lit3);
-        return;
-    }
-
-    //don't add the same clause twice
-    if (lit < lit2
-        && lit2 < lit3
-    ) {
-
-        //Add clause
-        tmp_lits = {upd_bigsolver_to_smallsolver(lit)
-            , upd_bigsolver_to_smallsolver(lit2)
-            , upd_bigsolver_to_smallsolver(lit3)
-        };
-        assert(compFinder->getVarComp(lit.var()) == comp);
-        assert(compFinder->getVarComp(lit2.var()) == comp);
-        assert(compFinder->getVarComp(lit3.var()) == comp);
-
-        //Add new clause
-        if (i->red()) {
-            //newSolver->addRedClause(tmp_lits);
-            numRemovedThirdRed++;
-        } else {
-            //Save backup
-            saveClause(vector<Lit>{lit, lit2, lit3});
-
-            newSolver->add_clause(tmp_lits);
-            numRemovedThirdIrred++;
-        }
-    } else {
-
-        //Just remove, already added above
-        if (i->red()) {
-            numRemovedThirdRed++;
-        } else {
-            numRemovedThirdIrred++;
-        }
-    }
-}
-
 void CompHandler::moveClausesImplicit(
     SATSolver* newSolver
     , const uint32_t comp
@@ -677,8 +602,6 @@ void CompHandler::moveClausesImplicit(
 ) {
     numRemovedHalfIrred = 0;
     numRemovedHalfRed = 0;
-    numRemovedThirdIrred = 0;
-    numRemovedThirdRed = 0;
 
     for(const uint32_t var: vars) {
     for(unsigned sign = 0; sign < 2; ++sign) {
@@ -705,17 +628,6 @@ void CompHandler::moveClausesImplicit(
                 move_binary_clause(newSolver, comp, i, lit);
                 continue;
             }
-
-            if (i->isTri()
-                && (compFinder->getVarComp(lit.var()) == comp
-                    || compFinder->getVarComp(i->lit2().var()) == comp
-                    || compFinder->getVarComp(i->lit3().var()) == comp
-                )
-            ) {
-                move_tri_clause(newSolver, comp, i, lit);
-                continue;
-            }
-
             *j++ = *i;
         }
         ws.shrink_(i-j);
@@ -724,17 +636,11 @@ void CompHandler::moveClausesImplicit(
     assert(numRemovedHalfIrred % 2 == 0);
     solver->binTri.irredBins -= numRemovedHalfIrred/2;
 
-    assert(numRemovedThirdIrred % 3 == 0);
-    solver->binTri.irredTris -= numRemovedThirdIrred/3;
-
     assert(numRemovedHalfRed % 2 == 0);
     solver->binTri.redBins -= numRemovedHalfRed/2;
-
-    assert(numRemovedThirdRed % 3 == 0);
-    solver->binTri.redTris -= numRemovedThirdRed/3;
 }
 
-void CompHandler::addSavedState(vector<lbool>& solution)
+void CompHandler::addSavedState(vector<lbool>& solution, vector<Lit>& decisions)
 {
     //Enqueue them. They may need to be extended, so enqueue is needed
     //manipulating "model" may not be good enough
@@ -748,6 +654,7 @@ void CompHandler::addSavedState(vector<lbool>& solution)
             const lbool val = savedState[var];
             assert(solution[var] == l_Undef);
             solution[var] = val;
+            decisions.push_back(Lit(var, val == l_False));
             //cout << "Solution to var " << var + 1 << " has been added: " << val << endl;
 
             solver->varData[interVar].polarity = (val == l_True);
@@ -823,7 +730,7 @@ void CompHandler::readdRemovedClauses()
 
     //Explain what we just did
     const double time_used = cpuTime() - myTime;
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout
         << "c [comp] re-added components. Lits: "
         << removedClauses.lits.size()
@@ -844,8 +751,12 @@ void CompHandler::readdRemovedClauses()
     removedClauses.sizes.clear();
 }
 
-void CompHandler::dump_removed_clauses(std::ostream* outfile) const
+uint32_t CompHandler::dump_removed_clauses(std::ostream* outfile) const
 {
+    if (outfile == NULL)
+        return removedClauses.sizes.size();
+
+    uint32_t num_cls = 0;
     vector<Lit> tmp;
     size_t at = 0;
     for (uint32_t size :removedClauses.sizes) {
@@ -855,8 +766,10 @@ void CompHandler::dump_removed_clauses(std::ostream* outfile) const
         }
         std::sort(tmp.begin(), tmp.end());
         *outfile << tmp << " 0" << endl;
+        num_cls ++;
 
         //Move 'at' along
         at += size;
     }
+    return num_cls;
 }

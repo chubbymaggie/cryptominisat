@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "solvertypes.h"
 #include "clause.h"
@@ -46,17 +47,11 @@ class PropByForGraph
             , isize(0)
             , clause(NULL)
         {
-            if (orig.getType() == binary_t || orig.getType() == tertiary_t) {
+            if (orig.getType() == binary_t) {
                 lits[0] = otherLit;
                 lits[1] = orig.lit2();
-                if (orig.getType() == tertiary_t) {
-                    lits[2] = orig.lit3();
-                    type = 2;
-                    isize = 3;
-                } else {
-                    type = 1;
-                    isize = 2;
-                }
+                type = 1;
+                isize = 2;
             }
             if (orig.isClause()) {
                 if (orig.isNULL()) {
@@ -114,11 +109,6 @@ class PropByForGraph
             return type == 1;
         }
 
-        bool isTri() const
-        {
-            return type == 2;
-        }
-
         const Clause* getClause() const
         {
             return clause;
@@ -149,8 +139,6 @@ inline std::ostream& operator<<(
 
     if (propByFull.isBin()) {
         os << propByFull[0] << " " << propByFull[1];
-    } else if (propByFull.isTri()) {
-        os <<propByFull[0] << " " << propByFull[1] << " " << propByFull[2];
     } else if (propByFull.isClause()) {
         if (propByFull.isNULL()) os << "null clause";
         else os << *propByFull.getClause();

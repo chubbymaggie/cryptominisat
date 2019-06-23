@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "gtest/gtest.h"
 
@@ -96,94 +97,6 @@ TEST_F(sub_impl, sub_2by2_4)
 
     sub->subsume_implicit();
     check_irred_cls_eq(s, "1, 4; 1, 2, 3, 4;-1, 2, 4");
-}
-
-//SUB 3-by-2
-TEST_F(sub_impl, sub_3by2_1)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("1, -2, 3"));
-    s->add_clause_outer(str_to_cl("1, -2"));
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "1, -2");
-}
-
-TEST_F(sub_impl, sub_3by2_2)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("3, 5, 7"));
-    s->add_clause_outer(str_to_cl("3, 5"));
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "3, 5");
-}
-
-TEST_F(sub_impl, sub_3by2_3)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("3, 4, 7"));
-    s->add_clause_outer(str_to_cl("3, 5, -7"));
-    s->add_clause_outer(str_to_cl("3, 5, 6"));
-    s->add_clause_outer(str_to_cl("3, 5"));
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "3, 5; 3, 4, 7");
-}
-
-TEST_F(sub_impl, sub_3by2_no)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("3, 4, 7"));
-    s->add_clause_outer(str_to_cl("3, 1, -7"));
-    s->add_clause_outer(str_to_cl("3, 5"));
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "3, 5; 3, 4, 7; 3, 1, -7");
-}
-
-
-//Stamp 3
-TEST_F(sub_impl, sub_3bystamp_1)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("1, -2, 3"));
-    add_to_stamp_irred(s, "1, 3");
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "");
-}
-
-TEST_F(sub_impl, sub_3bystamp_2)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("1, -2, 3"));
-    add_to_stamp_irred(s, "1, -2");
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "");
-}
-
-TEST_F(sub_impl, sub_3bystamp_3)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("4, 2, 3, 1"));
-    s->add_clause_outer(str_to_cl("4, 3, -2"));
-    s->add_clause_outer(str_to_cl("4, -2, 5"));
-    add_to_stamp_irred(s, "4, -2");
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "4, 2, 3, 1");
-}
-
-TEST_F(sub_impl, sub_3bystamp_no)
-{
-    s->new_vars(7);
-    s->add_clause_outer(str_to_cl("4, 2"));
-    add_to_stamp_irred(s, "4, -2");
-
-    sub->subsume_implicit();
-    check_irred_cls_eq(s, "4, 2");
 }
 
 int main(int argc, char **argv) {

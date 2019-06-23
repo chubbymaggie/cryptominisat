@@ -1,27 +1,28 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "gtest/gtest.h"
 
-#include "cryptominisat4/cryptominisat.h"
+#include "cryptominisat5/cryptominisat.h"
 #include "src/solverconf.h"
 #include <vector>
 using std::vector;
@@ -67,7 +68,7 @@ TEST_F(assump_interf, single_false)
     assumps.push_back(Lit(0, true));
     lbool ret = s->solve(&assumps);
     EXPECT_EQ( ret, l_False);
-    EXPECT_EQ( s->get_conflict().size(), 1);
+    EXPECT_EQ( s->get_conflict().size(), 1u);
     EXPECT_EQ( s->get_conflict()[0], Lit(0, false));
 }
 
@@ -108,7 +109,7 @@ TEST_F(assump_interf, binclause_false)
     assumps.push_back(Lit(1, true));
     lbool ret = s->solve(&assumps);
     EXPECT_EQ( ret, l_False);
-    EXPECT_EQ( s->get_conflict().size(), 2);
+    EXPECT_EQ( s->get_conflict().size(), 2u);
 
     vector<Lit> tmp = s->get_conflict();
     std::sort(tmp.begin(), tmp.end());
@@ -128,6 +129,12 @@ TEST_F(assump_interf, replace_true)
     EXPECT_EQ( ret, l_True);
     EXPECT_EQ( s->get_model()[0], l_False );
     EXPECT_EQ( s->get_model()[1], l_False );
+
+    assumps.clear();
+    assumps.push_back(Lit(0, true));
+    assumps.push_back(Lit(1, false));
+    ret = s->solve(&assumps);
+    EXPECT_EQ( ret, l_False);
 }
 
 TEST_F(assump_interf, replace_false)
@@ -146,7 +153,7 @@ TEST_F(assump_interf, replace_false)
     EXPECT_EQ( ret, l_False);
     EXPECT_EQ( s->okay(), true);
 
-    EXPECT_EQ( s->get_conflict().size(), 2);
+    EXPECT_EQ( s->get_conflict().size(), 2u);
 
     vector<Lit> tmp = s->get_conflict();
     std::sort(tmp.begin(), tmp.end());
@@ -169,7 +176,7 @@ TEST_F(assump_interf, set_var_by_prop)
     EXPECT_EQ( ret, l_False);
     EXPECT_EQ( s->okay(), true);
 
-    EXPECT_EQ( s->get_conflict().size(), 1);
+    EXPECT_EQ( s->get_conflict().size(), 1u);
 
     vector<Lit> tmp = s->get_conflict();
     EXPECT_EQ( tmp[0], Lit(1, false) );
@@ -186,7 +193,7 @@ TEST_F(assump_interf, only_assump)
     lbool ret = s->solve(&assumps);
     EXPECT_EQ( ret, l_False);
     EXPECT_EQ( s->okay(), true);
-    EXPECT_EQ( s->get_conflict().size(), 2);
+    EXPECT_EQ( s->get_conflict().size(), 2u);
 
     vector<Lit> tmp = s->get_conflict();
     std::sort(tmp.begin(), tmp.end());

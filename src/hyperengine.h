@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "cnf.h"
 #include "propby.h"
@@ -32,7 +33,6 @@ using std::vector;
 using std::set;
 
 namespace CMSat {
-using namespace CMSat;
 
 class HyperEngine : public PropEngine {
 public:
@@ -56,9 +56,6 @@ public:
 
     ///Add hyper-binary clause given this bin clause
     void  add_hyper_bin(Lit p);
-
-    ///Add hyper-binary clause given this tri-clause
-    void  add_hyper_bin(Lit p, Lit lit1, Lit lit2);
 
     ///Add hyper-binary clause given this large clause
     void  add_hyper_bin(Lit p, const Clause& cl);
@@ -86,23 +83,12 @@ private:
         , const Watched* k
         , PropBy& confl
     );
-    PropResult prop_tri_clause_with_acestor_info(
-        Watched*& i
-        , const Lit lit1
-        , PropBy& confl
-    );
 
     PropResult prop_normal_cl_with_ancestor_info(
         Watched* i
         , Watched*& j
         , const Lit p
         , PropBy& confl
-    );
-    PropResult propTriHelperComplex(
-        const Lit lit1
-        , const Lit lit2
-        , const Lit lit3
-        , const bool red
     );
     Lit prop_red_bin_dfs(
         StampType stampType

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
 # Copyright (C) 2014  Mate Soos
@@ -18,6 +18,8 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
 # 02110-1301, USA.
 
+from __future__ import with_statement  # Required in 2.5
+from __future__ import print_function
 import random
 
 
@@ -33,7 +35,7 @@ def get_max_var_from_clause(line):
         try:
             num = int(lit)
         except ValueError:
-            print "line '%s' contains a non-integer variable" % line2
+            print("line '%s' contains a non-integer variable" % line2)
 
         maxvar = max(maxvar, abs(num))
 
@@ -101,7 +103,7 @@ class debuglib:
         # file with ::solve()
         file_len = debuglib.file_len_no_comment(fname1)
         if num_to_add > 0:
-            nextToAdd = random.randint(1, (file_len / num_to_add) + 1)
+            nextToAdd = random.randint(1, int(file_len / num_to_add) + 1)
         else:
             nextToAdd = file_len + 1
 
@@ -129,7 +131,7 @@ class debuglib:
                     fout.write("c Solver::solve( %s )\n" % assumps)
 
                 nextToAdd = at + \
-                    random.randint(1, (file_len / num_to_add) + 1)
+                    random.randint(1, int(file_len / num_to_add) + 1)
 
             # calculate max variable
             maxvar = max(maxvar, get_max_var_from_clause(line))

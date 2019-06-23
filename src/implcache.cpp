@@ -1,28 +1,29 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "implcache.h"
 
-#ifndef __TRANSCACHE_H__
-#define __TRANSCACHE_H__
+#ifndef TRANSCACHE_H_
+#define TRANSCACHE_H_
 
 #include "solver.h"
 #include "varreplacer.h"
@@ -33,18 +34,6 @@
 using namespace CMSat;
 using std::cout;
 using std::endl;
-
-//Make all literals as if propagated only by redundant
-void ImplCache::makeAllRed()
-{
-    for(vector<TransCache>::iterator
-        it = implCache.begin(), end = implCache.end()
-        ; it != end
-        ; ++it
-    ) {
-        it->makeAllRed();
-    }
-}
 
 size_t ImplCache::mem_used() const
 {
@@ -140,7 +129,12 @@ bool ImplCache::clean(Solver* solver, bool* setSomething)
 
                     if (taut) {
                         toEnqueue.push_back(lit);
-                        (*solver->drat) << lit << fin;
+                        (*solver->drat) << add << lit
+                        #ifdef STATS_NEEDED
+                        << solver->clauseID++
+                        << solver->sumConflicts
+                        #endif
+                        << fin;
                     }
                 }
             }
@@ -252,7 +246,7 @@ bool ImplCache::clean(Solver* solver, bool* setSomething)
     }
 
     const double time_used = cpuTime()-myTime;
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         cout << "c [cache] cleaned."
         << " Updated: " << std::setw(7) << numUpdated/1000 << " K"
         << " Cleaned: " << std::setw(7) << numCleaned/1000 << " K"
@@ -280,16 +274,13 @@ void ImplCache::handleNewData(
     //the watchlists, which are being traversed by the callers, so we add these
     //new truths as delayed clauses, and add them at the end
 
-    vector<Lit> tmp;
-
     //a->b and (-a)->b, so 'b'
     if  (val[lit.var()] == lit.sign()) {
         delayedClausesToAddNorm.push_back(lit);
         runStats.bProp++;
     } else {
         //a->b, and (-a)->(-b), so equivalent literal
-        tmp.push_back(Lit(var, false));
-        tmp.push_back(Lit(lit.var(), false));
+        auto tmp = std::make_pair(Lit(var, false), Lit(lit.var(), false));
         bool sign = lit.sign();
         delayedClausesToAddXor.push_back(std::make_pair(tmp, sign));
         runStats.bXProp++;
@@ -299,34 +290,25 @@ void ImplCache::handleNewData(
 bool ImplCache::addDelayedClauses(Solver* solver)
 {
     assert(solver->ok);
+    vector<Lit> tmp;
 
     //Add all delayed clauses
     if (solver->conf.doFindAndReplaceEqLits) {
-        for(vector<std::pair<vector<Lit>, bool> > ::const_iterator
-            it = delayedClausesToAddXor.begin(), end = delayedClausesToAddXor.end()
-            ; it != end
-            ; ++it
-        ) {
-            bool OK = true;
-            for(vector<Lit>::const_iterator
-                it2 = it->first.begin(), end2 = it->first.end()
-                ; it2 != end2
-                ; it2++
+        for(const auto& x: delayedClausesToAddXor) {
+            Lit lit1 = x.first.first;
+            Lit lit2 = x.first.second;
+            if (solver->varData[lit1.var()].removed != Removed::none ||
+                solver->varData[lit2.var()].removed != Removed::none
             ) {
-                if (solver->varData[it2->var()].removed != Removed::none) {
-                    //Var has been eliminated one way or another. Don't add this clause
-                    OK = false;
-                    break;
-                }
+                //Var has been eliminated one way or another. Don't add this clause
+                continue;
             }
 
-            //If any of the variables have been eliminated (possible, if cache is used)
-            //then don't add this clause
-            if (!OK)
-                continue;
-
             //Add the clause
-            solver->add_xor_clause_inter(it->first, it->second, true);
+            tmp.clear();
+            tmp.push_back(lit1);
+            tmp.push_back(lit2);
+            solver->add_xor_clause_inter(tmp, x.second, true);
 
             //Check if this caused UNSAT
             if  (!solver->ok)
@@ -340,7 +322,7 @@ bool ImplCache::addDelayedClauses(Solver* solver)
         ; ++it
     ) {
         //Build unit clause
-        vector<Lit> tmp(1);
+        tmp.resize(1);
         tmp[0] = *it;
 
         //Add unit clause
@@ -390,7 +372,7 @@ end:
     const double time_used = cpuTime() - myTime;
     runStats.zeroDepthAssigns = solver->trail_size() - origTrailSize;
     runStats.cpu_time = time_used;
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         runStats.print_short(solver);
     }
     globalStats += runStats;
@@ -402,7 +384,7 @@ end:
         );
     }
 
-    return solver->ok;
+    return solver->okay();
 }
 
 void ImplCache::tryVar(
@@ -621,15 +603,6 @@ bool TransCache::mergeHelper(
     return taut;
 }
 
-//Make all literals as if propagated only by redundant
-void TransCache::makeAllRed()
-{
-    for(size_t i = 0; i < lits.size(); i++) {
-        lits[i] = LitExtra(lits[i].getLit(), false);
-    }
-
-}
-
 void TransCache::updateVars(
     const std::vector< uint32_t >& outerToInter
     , const size_t newMaxVars
@@ -677,4 +650,4 @@ void ImplCache::TryBothStats::print_short(Solver* solver) const
 }
 
 
-#endif //__TRANSCACHE_H__
+#endif //TRANSCACHE_H_

@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef __BVA_H__
 #define __BVA_H__
@@ -41,12 +42,31 @@ public:
     bool bounded_var_addition();
     size_t mem_used() const;
 
+    struct Stats
+    {
+        double time_used = 0;
+
+        Stats& operator +=(const Stats& other) {
+            time_used += other.time_used;
+            return *this;
+        }
+
+        void reset()
+        {
+            *this = Stats();
+        }
+    };
+
+    const Stats& get_stats() const;
+
 private:
     Solver* solver;
     OccSimplifier* simplifier;
     vector<uint16_t>& seen;
     vector<uint8_t>& seen2;
 
+    Stats runStats;
+    Stats globalStats;
     bool bva_verbosity = 0;
     size_t bva_worked;
     size_t bva_simp_size;
@@ -124,7 +144,7 @@ private:
     };
     size_t calc_watch_irred_size(const Lit lit) const;
     void calc_watch_irred_sizes();
-    lit_pair most_occuring_lit_in_potential(size_t& num_occur);
+    lit_pair most_occurring_lit_in_potential(size_t& num_occur);
     lit_pair lit_diff_watches(const OccurClause& a, const OccurClause& b);
     Lit least_occurring_except(const OccurClause& c);
     bool simplifies_system(const size_t num_occur) const;
@@ -157,7 +177,7 @@ private:
     vector<size_t> watch_irred_sizes;
     struct VarBVAOrder
     {
-        VarBVAOrder(vector<size_t>& _watch_irred_sizes) :
+        explicit VarBVAOrder(vector<size_t>& _watch_irred_sizes) :
             watch_irred_sizes(_watch_irred_sizes)
         {}
 
@@ -169,6 +189,11 @@ private:
 
     int64_t bounded_var_elim_time_limit;
 };
+
+inline const BVA::Stats& BVA::get_stats() const
+{
+    return globalStats;
+}
 
 }
 

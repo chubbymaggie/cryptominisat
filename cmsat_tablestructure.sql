@@ -12,41 +12,21 @@ CREATE TABLE `reduceDB` (
   `restarts` bigint(20) NOT NULL,
   `conflicts` bigint(20) NOT NULL,
   `runtime` float NOT NULL,
-  `reduceDBs` int(20) NOT NULL,
-  `irredClsVisited` bigint(20) NOT NULL,
-  `irredLitsVisited` bigint(20) NOT NULL,
-  `redClsVisited` bigint(20) NOT NULL,
-  `redLitsVisited` bigint(20) NOT NULL,
-  `removedNum` int(20) NOT NULL,
-  `removedLits` bigint(20) NOT NULL,
-  `removedGlue` bigint(20) NOT NULL,
-  `removedResolBinIrred` bigint(20) NOT NULL,
-  `removedResolBinRed` bigint(20) NOT NULL,
-  `removedResolTriIrred` bigint(20) NOT NULL,
-  `removedResolTriRed` bigint(20) NOT NULL,
-  `removedResolLIrred` bigint(20) NOT NULL,
-  `removedResolLRed` bigint(20) NOT NULL,
-  `removedAge` bigint(20) NOT NULL,
-  `removedLitVisited` bigint(20) NOT NULL,
-  `removedProp` bigint(20) NOT NULL,
-  `removedConfl` bigint(20) NOT NULL,
-  `removedLookedAt` bigint(20) NOT NULL,
-  `removedUsedUIP` bigint(20) NOT NULL,
-  `remainNum` int(20) NOT NULL,
-  `remainLits` bigint(20) NOT NULL,
-  `remainGlue` bigint(20) NOT NULL,
-  `remainResolBinIrred` bigint(20) NOT NULL,
-  `remainResolBinRed` bigint(20) NOT NULL,
-  `remainResolTriIrred` bigint(20) NOT NULL,
-  `remainResolTriRed` bigint(20) NOT NULL,
-  `remainResolLIrred` bigint(20) NOT NULL,
-  `remainResolLRed` bigint(20) NOT NULL,
-  `remainAge` bigint(20) NOT NULL,
-  `remainLitVisited` bigint(20) NOT NULL,
-  `remainProp` bigint(20) NOT NULL,
-  `remainConfl` bigint(20) NOT NULL,
-  `remainLookedAt` bigint(20) NOT NULL,
-  `remainUsedUIP` bigint(20) NOT NULL
+
+  `clauseID` int(20) NOT NULL,
+  `dump_no` int(20) NOT NULL,
+  `conflicts_made` bigint(20) NOT NULL,
+  `sum_of_branch_depth_conflict` bigint(20) NOT NULL,
+  `propagations_made` bigint(20) NOT NULL,
+  `clause_looked_at` bigint(20) NOT NULL,
+  `used_for_uip_creation` bigint(20) NOT NULL,
+  `last_touched_diff` bigint(20) NOT NULL,
+  `activity_rel` float(20) NOT NULL,
+  `locked` int(20) NOT NULL,
+  `in_xor` int(20) NOT NULL,
+  `glue` int(20) NOT NULL,
+  `size` int(20) NOT NULL,
+  `ttl` int(20) NOT NULL
 );
 
 DROP TABLE IF EXISTS `restart`;
@@ -55,15 +35,15 @@ CREATE TABLE `restart` (
   `simplifications` int(20) NOT NULL,
   `restarts` bigint(20) NOT NULL,
   `conflicts` bigint(20) NOT NULL,
+  `latest_feature_calc` int(20) NOT NULL,
   `runtime` float NOT NULL,
   `numIrredBins` int(20) NOT NULL,
-  `numIrredTris` int(20) NOT NULL,
   `numIrredLongs` int(20) NOT NULL,
   `numRedBins` int(20) NOT NULL,
-  `numRedTris` int(20) NOT NULL,
   `numRedLongs` int(20) NOT NULL,
   `numIrredLits` bigint(20) NOT NULL,
   `numredLits` bigint(20) NOT NULL,
+  `restart_type` char(20) NOT NULL,
   `glue` float NOT NULL,
   `glueSD` float NOT NULL,
   `glueMin` int(20) NOT NULL,
@@ -94,24 +74,17 @@ CREATE TABLE `restart` (
   `trailDepthDeltaMax` int(20) NOT NULL,
   `propBinIrred` bigint(20) NOT NULL,
   `propBinRed` bigint(20) NOT NULL,
-  `propTriIrred` bigint(20) NOT NULL,
-  `propTriRed` bigint(20) NOT NULL,
   `propLongIrred` bigint(20) NOT NULL,
   `propLongRed` bigint(20) NOT NULL,
   `conflBinIrred` bigint(20) NOT NULL,
   `conflBinRed` bigint(20) NOT NULL,
-  `conflTriIrred` bigint(20) NOT NULL,
-  `conflTriRed` bigint(20) NOT NULL,
   `conflLongIrred` bigint(20) NOT NULL,
   `conflLongRed` bigint(20) NOT NULL,
   `learntUnits` int(20) NOT NULL,
   `learntBins` int(20) NOT NULL,
-  `learntTris` int(20) NOT NULL,
   `learntLongs` int(20) NOT NULL,
   `resolBinIrred` bigint(20) NOT NULL,
   `resolBinRed` bigint(20) NOT NULL,
-  `resolTriIrred` bigint(20) NOT NULL,
-  `resolTriRed` bigint(20) NOT NULL,
   `resolLIrred` bigint(20) NOT NULL,
   `resolLRed` bigint(20) NOT NULL,
   `propagations` bigint(20) NOT NULL,
@@ -132,9 +105,9 @@ CREATE TABLE `timepassed` (
   `runID` bigint(20) NOT NULL,
   `simplifications` bigint(20) NOT NULL,
   `conflicts` bigint(20) NOT NULL,
-  `runtime` double NOT NULL,
+  `runtime` float NOT NULL,
   `name` varchar(200) NOT NULL,
-  `elapsed` double NOT NULL,
+  `elapsed` float NOT NULL,
   `timeout` int(20) DEFAULT NULL,
   `percenttimeremain` float DEFAULT NULL
 );
@@ -144,7 +117,7 @@ CREATE TABLE `memused` (
   `runID` bigint(20) NOT NULL,
   `simplifications` bigint(20) NOT NULL,
   `conflicts` bigint(20) NOT NULL,
-  `runtime` double NOT NULL,
+  `runtime` float NOT NULL,
   `name` varchar(200) NOT NULL,
   `MB` int(20) NOT NULL
 );
@@ -152,7 +125,8 @@ CREATE TABLE `memused` (
 DROP TABLE IF EXISTS `solverRun`;
 CREATE TABLE `solverRun` (
   `runID` bigint(20) NOT NULL,
-  `runtime` bigint(20) NOT NULL
+  `runtime` float NOT NULL,
+  `gitrev` varchar(100) NOT NULL
 );
 
 DROP TABLE IF EXISTS `startup`;
@@ -173,7 +147,9 @@ CREATE TABLE `clauseStats` (
   `runID` bigint(20) NOT NULL,
   `simplifications` int(20) NOT NULL,
   `restarts` bigint(20) NOT NULL,
+  `prev_restart` bigint(20) NOT NULL,
   `conflicts` bigint(20) NOT NULL,
+  `latest_feature_calc` int(20) NOT NULL,
   `clauseID` bigint(20) NOT NULL,
 
   `glue` int(20) NOT NULL,
@@ -181,60 +157,165 @@ CREATE TABLE `clauseStats` (
   `conflicts_this_restart` bigint(20) NOT NULL,
   `num_overlap_literals` int(20) NOT NULL,
   `num_antecedents` int(20) NOT NULL,
-  `antecedents_avg_size` int(20) NOT NULL,
+  `num_total_lits_antecedents` int(20) NOT NULL,
+  `antecedents_avg_size` float(20) NOT NULL,
 
   `backtrack_level` int(20) NOT NULL,
   `decision_level` int(20) NOT NULL,
+  `decision_level_pre1` int(20) NOT NULL,
+  `decision_level_pre2` int(20) NOT NULL,
   `trail_depth_level` int(20) NOT NULL,
+  `cur_restart_type` char(20) NOT NULL,
 
   `atedecents_binIrred` int(20) NOT NULL,
   `atedecents_binRed` int(20) NOT NULL,
-  `atedecents_triIrred` int(20) NOT NULL,
-  `atedecents_triRed` int(20) NOT NULL,
   `atedecents_longIrred` int(20) NOT NULL,
   `atedecents_longRed` int(20) NOT NULL,
 
-  `vsids_vars_avg` double NOT NULL,
-  `vsids_vars_var` double NOT NULL,
-  `vsids_vars_max` double NOT NULL,
+  `last_dec_var_act_vsids_0` float NOT NULL,
+  `last_dec_var_act_vsids_1` float NOT NULL,
+  `first_dec_var_act_vsids_0` float NOT NULL,
+  `first_dec_var_act_vsids_1` float NOT NULL,
 
-  `antecedents_glue_long_reds_avg` double NOT NULL,
-  `antecedents_glue_long_reds_var` double NOT NULL,
+  `vsids_vars_avg` float NOT NULL,
+  `vsids_vars_var` float NOT NULL,
+  `vsids_vars_min` float NOT NULL,
+  `vsids_vars_max` float NOT NULL,
+
+  `antecedents_glue_long_reds_avg` float NOT NULL,
+  `antecedents_glue_long_reds_var` float NOT NULL,
   `antecedents_glue_long_reds_min` int(20) NOT NULL,
   `antecedents_glue_long_reds_max` int(20) NOT NULL,
 
-  `antecedents_long_red_age_avg` double NOT NULL,
-  `antecedents_long_red_age_var` double NOT NULL,
+  `antecedents_long_red_age_avg` float NOT NULL,
+  `antecedents_long_red_age_var` float NOT NULL,
   `antecedents_long_red_age_min` bigint(20) NOT NULL,
   `antecedents_long_red_age_max` bigint(20) NOT NULL,
 
-  `vsids_of_resolving_literals_avg` double NOT NULL,
-  `vsids_of_resolving_literals_var` double NOT NULL,
-  `vsids_of_resolving_literals_min` double NOT NULL,
-  `vsids_of_resolving_literals_max` double NOT NULL,
+  `vsids_of_resolving_literals_avg` float NOT NULL,
+  `vsids_of_resolving_literals_var` float NOT NULL,
+  `vsids_of_resolving_literals_min` float NOT NULL,
+  `vsids_of_resolving_literals_max` float NOT NULL,
 
-  `vsids_of_all_incoming_lits_avg` double NOT NULL,
-  `vsids_of_all_incoming_lits_var` double NOT NULL,
-  `vsids_of_all_incoming_lits_min` double NOT NULL,
-  `vsids_of_all_incoming_lits_max` double NOT NULL,
+  `vsids_of_all_incoming_lits_avg` float NOT NULL,
+  `vsids_of_all_incoming_lits_var` float NOT NULL,
+  `vsids_of_all_incoming_lits_min` float NOT NULL,
+  `vsids_of_all_incoming_lits_max` float NOT NULL,
 
-  `antecedents_antecedents_vsids_avg` double NOT NULL,
+  `antecedents_antecedents_vsids_avg` float NOT NULL,
 
-  `decision_level_hist` double NOT NULL,
-  `backtrack_level_hist` double NOT NULL,
-  `trail_depth_level_hist` double NOT NULL,
-  `vsids_vars_hist` double NOT NULL,
-  `size_hist` double NOT NULL,
-  `glue_hist` double NOT NULL,
-  `num_antecedents_hist` double NOT NULL
+  `decision_level_hist` float NOT NULL,
+  `backtrack_level_hist_lt` float NOT NULL,
+  `trail_depth_level_hist` float NOT NULL,
+  `vsids_vars_hist` float NOT NULL,
+  `size_hist` float NOT NULL,
+  `glue_hist` float NOT NULL,
+  `num_antecedents_hist` float NOT NULL,
+  `antec_sum_size_hist` float NOT NULL,
+  `antec_overlap_hist` float NOT NULL,
+
+  `branch_depth_hist_queue` float NOT NULL,
+  `trail_depth_hist` float NOT NULL,
+  `trail_depth_hist_longer` float NOT NULL,
+  `num_resolutions_hist` float NOT NULL,
+  `confl_size_hist` float NOT NULL,
+  `trail_depth_delta_hist` float NOT NULL,
+  `backtrack_level_hist` float NOT NULL,
+  `glue_hist_queue` float NOT NULL,
+  `glue_hist_long` float NOT NULL
+);
+
+DROP TABLE IF EXISTS `features`;
+CREATE TABLE `features` (
+  `runID` bigint(20) NOT NULL,
+  `simplifications` int(20) NOT NULL,
+  `restarts` bigint(20) NOT NULL,
+  `conflicts` bigint(20) NOT NULL,
+  `latest_feature_calc` int(20) NOT NULL,
+
+  `numVars` int(20) NOT NULL,
+  `numClauses` int(20) NOT NULL,
+  `var_cl_ratio` double NOT NULL,
+
+  -- Clause distribution
+  `binary` double NOT NULL,
+  `horn` double NOT NULL,
+  `horn_mean` double NOT NULL,
+  `horn_std` double NOT NULL,
+  `horn_min` double NOT NULL,
+  `horn_max` double NOT NULL,
+  `horn_spread` double NOT NULL,
+
+  `vcg_var_mean` double NOT NULL,
+  `vcg_var_std` double NOT NULL,
+  `vcg_var_min` double NOT NULL,
+  `vcg_var_max` double NOT NULL,
+  `vcg_var_spread` double NOT NULL,
+
+  `vcg_cls_mean` double NOT NULL,
+  `vcg_cls_std` double NOT NULL,
+  `vcg_cls_min` double NOT NULL,
+  `vcg_cls_max` double NOT NULL,
+  `vcg_cls_spread` double NOT NULL,
+
+  `pnr_var_mean` double NOT NULL,
+  `pnr_var_std` double NOT NULL,
+  `pnr_var_min` double NOT NULL,
+  `pnr_var_max` double NOT NULL,
+  `pnr_var_spread` double NOT NULL,
+
+  `pnr_cls_mean` double NOT NULL,
+  `pnr_cls_std` double NOT NULL,
+  `pnr_cls_min` double NOT NULL,
+  `pnr_cls_max` double NOT NULL,
+  `pnr_cls_spread` double NOT NULL,
+
+  -- Conflict clauses
+  `avg_confl_size` double NOT NULL,
+  `confl_size_min` double NOT NULL,
+  `confl_size_max` double NOT NULL,
+  `avg_confl_glue` double NOT NULL,
+  `confl_glue_min` double NOT NULL,
+  `confl_glue_max` double NOT NULL,
+  `avg_num_resolutions` double NOT NULL,
+  `num_resolutions_min` double NOT NULL,
+  `num_resolutions_max` double NOT NULL,
+  `learnt_bins_per_confl` double NOT NULL,
+
+  -- Search
+  `avg_branch_depth` double NOT NULL,
+  `branch_depth_min` double NOT NULL,
+  `branch_depth_max` double NOT NULL,
+  `avg_trail_depth_delta` double NOT NULL,
+  `trail_depth_delta_min` double NOT NULL,
+  `trail_depth_delta_max` double NOT NULL,
+  `avg_branch_depth_delta` double NOT NULL,
+  `props_per_confl` double NOT NULL,
+  `confl_per_restart` double NOT NULL,
+  `decisions_per_conflict` double NOT NULL,
+
+    -- clause distributions
+  `red_glue_distr_mean` double NOT NULL,
+  `red_glue_distr_var` double NOT NULL,
+  `red_size_distr_mean` double NOT NULL,
+  `red_size_distr_var` double NOT NULL,
+  `red_activity_distr_mean` double NOT NULL,
+  `red_activity_distr_var` double NOT NULL,
+
+  `irred_glue_distr_mean` double NOT NULL,
+  `irred_glue_distr_var` double NOT NULL,
+  `irred_size_distr_mean` double NOT NULL,
+  `irred_size_distr_var` double NOT NULL,
+  `irred_activity_distr_mean` double NOT NULL,
+  `irred_activity_distr_var` double NOT NULL
 );
 
 DROP TABLE IF EXISTS `goodClauses`;
 create table `goodClauses` (
     `runID` bigint(20) NOT NULL,
     `clauseID` bigint(20) NOT NULL,
-    `numUsed` bigint(20) NOT NULL,
-    `usedForTime` bigint(20) NOT NULL
+    `num_used` bigint(20) NOT NULL,
+    `last_confl_used` bigint(20) NOT NULL
 );
 
 -- create index `idx6` on `restart` (`runID`,`simplifications`);

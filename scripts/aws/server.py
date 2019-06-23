@@ -1,6 +1,23 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Copyright (C) 2018  Mate Soos
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; version 2
+# of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+
 from __future__ import print_function
 import os
 import socket
@@ -10,29 +27,15 @@ import pickle
 import time
 import pprint
 import traceback
-import subprocess
 import Queue
 import threading
 import logging
 import server_option_parser
 
 # for importing in systems where "." is not in the PATH
-import glob
 sys.path.append(os.getcwd())
 from common_aws import *
 import RequestSpotClient
-
-
-def get_revision():
-    _, solvername = os.path.split(options.base_dir + options.solver)
-    if solvername != "cryptominisat4":
-        return solvername
-
-    pwd = os.getcwd()
-    os.chdir(options.base_dir + "cryptominisat")
-    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'])
-    os.chdir(pwd)
-    return revision.strip()
 
 
 def get_n_bytes_from_connection(sock, MSGLEN):
@@ -48,7 +51,11 @@ def get_n_bytes_from_connection(sock, MSGLEN):
     return ''.join(chunks)
 
 
-def send_command(sock, command, tosend={}):
+def send_command(sock, command, tosend=None):
+    # note, this is a python issue, we can't set above tosend={}
+    # https://nedbatchelder.com/blog/200806/pylint.html
+    tosend = tosend or {}
+
     tosend["command"] = command
     tosend = pickle.dumps(tosend)
     tosend = struct.pack('!q', len(tosend)) + tosend
@@ -72,19 +79,15 @@ class Server (threading.Thread):
         self.files_finished = []
         self.files = {}
 
-        os.system("aws s3 cp s3://msoos-solve-data/solvers/%s . --region us-west-2" % options.cnf_list)
+        logging.info("Getting list of files %s", options.cnf_list)
+        key = boto.connect_s3().get_bucket("msoos-solve-data").get_key("solvers/" + options.cnf_list)
+        key.get_contents_to_filename(options.cnf_list)
+
         fnames = open(options.cnf_list, "r")
         logging.info("CNF list is file %s", options.cnf_list)
-        start = True
         num = 0
         for fname in fnames:
             fname = fname.strip()
-            if start:
-                self.cnf_dir = fname
-                logging.info("CNF dir is %s", self.cnf_dir)
-                start = False
-                continue
-
             self.files[num] = ToSolve(num, fname)
             self.files_available.append(num)
             logging.info("File added: %s", fname)
@@ -122,16 +125,19 @@ class Server (threading.Thread):
 
     def rename_files_to_final(self, files):
         for fnames in files:
-            logging.info("Renaming file %s to %s",
-                         fnames[0], fnames[1])
-            ret = os.system("aws s3 mv s3://%s/%s s3://%s/%s --region us-west-2" %
-                            (options.s3_bucket, fnames[0], options.s3_bucket,
-                             fnames[1]))
+            logging.info("Renaming file %s to %s", fnames[0], fnames[1])
+            ret = os.system("aws s3 mv s3://{bucket}/{origname} s3://{bucket}/{toname} --region {region}".format(
+                bucket=options.s3_bucket,
+                origname=fnames[0],
+                toname=fnames[1],
+                region=options.region))
+            if ret:
+                logging.warn("Renaming file to final name failed!")
 
     def check_for_dead_files(self):
         this_time = time.time()
         files_to_remove_from_files_running = []
-        for file_num, starttime in self.files_running.iteritems():
+        for file_num, starttime in self.files_running.items():
             duration = this_time - starttime
             # print("* death check. running:" , file_num, " duration: ",
             # duration)
@@ -186,14 +192,15 @@ class Server (threading.Thread):
         tosend["solver"] = options.solver
         tosend["git_rev"] = options.git_rev
         tosend["stats"] = options.stats
+        tosend["gauss"] = options.gauss
         tosend["s3_bucket"] = options.s3_bucket
-        tosend["s3_folder"] = options.s3_folder
+        tosend["given_folder"] = options.given_folder
         tosend["timeout_in_secs"] = options.timeout_in_secs
         tosend["mem_limit_in_mb"] = options.mem_limit_in_mb
         tosend["noshutdown"] = options.noshutdown
-        tosend["cnf_dir"] = self.cnf_dir
         tosend["extra_opts"] = options.extra_opts
         tosend["drat"] = options.drat
+        tosend["region"] = options.region
 
         return tosend
 
@@ -271,7 +278,6 @@ class Listener (threading.Thread):
 
     def __init__(self):
         threading.Thread.__init__(self)
-        pass
 
     def listen_to_connection(self):
         # Create a TCP/IP socket
@@ -308,10 +314,11 @@ class Listener (threading.Thread):
 
 class SpotManager (threading.Thread):
 
-    def __init__(self, noshutdown):
+    def __init__(self):
         threading.Thread.__init__(self)
         self.spot_creator = RequestSpotClient.RequestSpotClient(
-            options.cnf_list == "test", noshutdown=noshutdown,
+            options.git_rev,
+            ("test" in options.cnf_list), noshutdown=options.noshutdown,
             count=options.client_count)
 
     def run(self):
@@ -331,7 +338,7 @@ def shutdown(exitval=0):
     toexec = "sudo shutdown -h now"
     logging.info("SHUTTING DOWN")
 
-    #send email
+    # send email
     try:
         email_subject = "Server shutting down "
         if exitval == 0:
@@ -339,10 +346,12 @@ def shutdown(exitval=0):
         else:
             email_subject += "FAIL"
 
-        full_s3_folder = get_s3_folder(options.s3_folder,
-                                       options.git_rev,
-                                       options.timeout_in_secs,
-                                       options.mem_limit_in_mb)
+        full_s3_folder = get_s3_folder(
+            options.given_folder,
+            options.git_rev,
+            options.solver,
+            options.timeout_in_secs,
+            options.mem_limit_in_mb)
         text = """Server finished. Please download the final data:
 
 mkdir {0}
@@ -362,15 +371,8 @@ So long and thanks for all the fish!
         the_trace = traceback.format_exc().rstrip().replace("\n", " || ")
         logging.error("Cannot send email! Traceback: %s", the_trace)
 
-    #upload log
-    upload_log(options.s3_bucket,
-               full_s3_folder,
-               options.logfile_name,
-               "server-%s" % get_ip_address("eth0"))
-
     if not options.noshutdown:
         os.system(toexec)
-        pass
 
     exit(exitval)
 
@@ -404,12 +406,12 @@ if __name__ == "__main__":
                  pprint.pformat(options, indent=4).replace("\n", " || "))
 
     if not options.git_rev:
-        options.git_rev = get_revision()
+        options.git_rev = get_revision(options.base_dir + options.solver, options.base_dir)
         logging.info("Revision not given, taking HEAD: %s", options.git_rev)
 
     server = Server()
     listener = Listener()
-    spotmanager = SpotManager(options.noshutdown)
+    spotmanager = SpotManager()
     listener.setDaemon(True)
     server.setDaemon(True)
     spotmanager.setDaemon(True)

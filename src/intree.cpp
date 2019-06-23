@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "intree.h"
 #include "solver.h"
@@ -27,6 +28,7 @@
 #include "watchalgos.h"
 
 #include <cmath>
+#include <cassert>
 
 using namespace CMSat;
 
@@ -47,18 +49,23 @@ bool InTree::replace_until_fixedpoint(bool& aborted)
     uint64_t bogoprops = 0;
     uint32_t last_replace = std::numeric_limits<uint32_t>::max();
     uint32_t this_replace = solver->varReplacer->get_num_replaced_vars();
-    while(last_replace != this_replace) {
+    while(last_replace != this_replace && !aborted) {
         last_replace = this_replace;
         solver->clauseCleaner->remove_and_clean_all();
         bool OK = solver->varReplacer->replace_if_enough_is_found(0, &bogoprops);
         if (!OK) {
             return false;
         }
+
+        if (solver->varReplacer->get_scc_depth_warning_triggered()) {
+            aborted = true;
+            return solver->okay();
+        }
         this_replace = solver->varReplacer->get_num_replaced_vars();
 
         if (bogoprops > time_limit) {
             aborted = true;
-            return true;
+            return solver->okay();
         }
     }
 
@@ -80,13 +87,14 @@ bool InTree::watches_only_contains_nonbin(const Lit lit) const
 bool InTree::check_timeout_due_to_hyperbin()
 {
     assert(!(solver->timedOutPropagateFull && solver->drat->enabled()));
+    assert(!(solver->timedOutPropagateFull && solver->conf.simulate_drat));
 
     if (solver->timedOutPropagateFull
-        && !solver->drat->enabled()
+        && !(solver->drat->enabled() || solver->conf.simulate_drat)
     ) {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
-            << "c [intree] intra-propagation timout,"
+            << "c [intree] intra-propagation timeout,"
             << " turning off OTF hyper-bin&trans-red"
             << endl;
         }
@@ -133,12 +141,12 @@ bool InTree::intree_probe()
     bool aborted = false;
     if (!replace_until_fixedpoint(aborted))
     {
-        return false;
+        return solver->okay();
     }
     if (aborted) {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
-            << "c [intree] too expensive SCC + varreplace loop: aborting"
+            << "c [intree] too expensive or depth exceeded during SCC: aborting"
             << endl;
         }
         solver->use_depth_trick = true;
@@ -176,7 +184,7 @@ bool InTree::intree_probe()
     const double time_remain = float_div(bogoprops_remain, bogoprops_to_use);
     const bool time_out = (bogoprops_remain < 0);
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout << "c [intree] Set "
         << (orig_num_free_vars - solver->get_num_free_vars())
         << " vars"
@@ -256,7 +264,7 @@ void InTree::tree_look()
             timeout = handle_lit_popped_from_queue(elem.propagated, elem.other_lit, elem.red);
         } else {
             assert(solver->decisionLevel() > 0);
-            solver->cancelUntil<false>(solver->decisionLevel()-1);
+            solver->cancelUntil<false, true>(solver->decisionLevel()-1);
 
             depth_failed.pop_back();
             assert(!depth_failed.empty());
@@ -270,7 +278,7 @@ void InTree::tree_look()
                 if (tmp.var_reason_changed != var_Undef) {
                     solver->varData[tmp.var_reason_changed].reason = tmp.orig_propby;
                     if (solver->conf.verbosity >= 10) {
-                        cout << "RESet reason for VAR " << tmp.var_reason_changed+1 << " to: " << tmp.orig_propby.lit2() << " red: " << (int)tmp.orig_propby.isRedStep() << endl;
+                        cout << "RESet reason for VAR " << tmp.var_reason_changed+1 << " to:  ????" << /*tmp.orig_propby.lit2() << */ " red: " << (int)tmp.orig_propby.isRedStep() << endl;
                     }
                 }
             }
@@ -285,7 +293,7 @@ void InTree::tree_look()
 
     bogoprops_remain -= (int64_t)solver->propStats.bogoProps + (int64_t)solver->propStats.otfHyperTime;
 
-    solver->cancelUntil<false>(0);
+    solver->cancelUntil<false, true>(0);
     empty_failed_list();
 }
 
@@ -328,7 +336,9 @@ bool InTree::handle_lit_popped_from_queue(const Lit lit, const Lit other_lit, co
         bool ok;
         if (solver->conf.otfHyperbin) {
             uint64_t max_hyper_time = std::numeric_limits<uint64_t>::max();
-            if (!solver->drat->enabled()) {
+            if (!solver->drat->enabled() &&
+                !solver->conf.simulate_drat
+            ) {
                 max_hyper_time =
                 solver->propStats.otfHyperTime
                 + solver->propStats.bogoProps
@@ -348,7 +358,7 @@ bool InTree::handle_lit_popped_from_queue(const Lit lit, const Lit other_lit, co
             depth_failed.back() = 1;
             failed.push_back(~lit);
             if (solver->conf.verbosity >= 10) {
-                cout << "Failed :" << ~lit << " level: " << solver->decisionLevel() << endl;
+                cout << "(timeout?) Failed :" << ~lit << " level: " << solver->decisionLevel() << endl;
             }
         } else {
             hyperbin_added += solver->hyper_bin_res_all(false);
@@ -373,14 +383,30 @@ bool InTree::empty_failed_list()
 
         if (solver->value(lit) == l_Undef) {
             solver->enqueue(lit);
-            *(solver->drat) << lit << fin;
+            *(solver->drat) << add << lit
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
             solver->ok = solver->propagate<true>().isNULL();
             if (!solver->ok) {
                 return false;
             }
         } else if (solver->value(lit) == l_False) {
-            *(solver->drat) << ~lit << fin;
-            *(solver->drat) << fin;
+            *(solver->drat) << add << ~lit
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
+
+            *(solver->drat) << add
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
             solver->ok = false;
             return false;
         }
@@ -417,4 +443,17 @@ void InTree::enqueue(const Lit lit, const Lit other_lit, bool red_cl)
         }
     }
     queue.push_back(QueueElem(lit_Undef, lit_Undef, false));
+}
+
+
+double InTree::mem_used() const
+{
+    double mem = 0;
+    mem += sizeof(InTree);
+    mem += roots.size()*sizeof(Lit);
+    mem += failed.size()*sizeof(Lit);
+    mem += reset_reason_stack.size()*sizeof(ResetReason);
+    mem += queue.size()*sizeof(QueueElem);
+    mem += depth_failed.size()*sizeof(char);
+    return mem;
 }

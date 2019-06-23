@@ -1,9 +1,24 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Copyright (C) 2018  Mate Soos
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; version 2
+# of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+
 from __future__ import print_function
-import os
-import time
 import boto
 import traceback
 import sys
@@ -20,7 +35,7 @@ config = ConfigParser.ConfigParser()
 config.read("/home/ubuntu/email.conf")
 
 
-def send_email(subject, text, fname = None):
+def send_email(subject, text, fname=None):
     msg = MIMEMultipart()
     msg['Subject'] = 'Email from solver: %s' % subject
     msg['From'] = 'msoos@msoos.org'
@@ -35,7 +50,7 @@ def send_email(subject, text, fname = None):
 
     # Attachment(s)
     if fname:
-        part = MIMEApplication(open(fname,"rb").read())
+        part = MIMEApplication(open(fname, "rb").read())
         part.add_header('Content-Disposition', 'attachment', filename="attachment.txt")
         msg.attach(part)
 
@@ -60,35 +75,12 @@ def get_ip_address(ifname):
 
 
 def get_revision(full_solver_path, base_dir):
-    _, solvername = os.path.split(full_solver_path)
-    if solvername == "cryptominisat":
-        os.chdir('%s/cryptominisat' % base_dir)
-        revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'])
-    else:
-        revision = solvername
-
+    revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'])
     return revision.strip()
 
 
-def upload_log(bucket, folder, logfile_name, fname):
-    try:
-        boto_conn = boto.connect_s3()
-        boto_bucket = boto_conn.get_bucket(bucket)
-        k = boto.s3.key.Key(boto_bucket)
-
-        k.key = folder + "/" + "logs/" + fname
-        boto_bucket.delete_key(k)
-        k.set_contents_from_filename(logfile_name)
-
-    except:
-        exc_type, exc_value, exc_traceback = sys.exc_info()
-        the_trace = traceback.format_exc().rstrip().replace("\n", " || ")
-        print("traceback for boto issue: %s" % the_trace)
-
-
-def get_s3_folder(folder, rev, timeout, memout):
+def get_s3_folder(folder, rev, solver, timeout, memout):
     print("folder: %s rev: %s tout: %s memout %s" % (folder, rev, timeout, memout))
-    return folder + "-%s-tout-%d-mout-%d" \
-        % (rev[:9],
-           timeout,
-           memout)
+    solver_exe = solver[solver.rfind("/")+1:]
+    return folder + "-{rev}-{solver}-tout-{tout}-mout-{mout}".format(
+        rev=rev[:9], solver=solver_exe, tout=timeout, mout=memout)

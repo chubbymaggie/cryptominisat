@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef __PROPENGINE_H__
 #define __PROPENGINE_H__
@@ -26,6 +27,7 @@
 #include <string.h>
 #include <stack>
 #include <set>
+#include <cmath>
 
 //#define ANIMATE3D
 
@@ -39,6 +41,7 @@
 #include "clause.h"
 #include "boundedqueue.h"
 #include "cnf.h"
+#include "watchalgos.h"
 
 namespace CMSat {
 
@@ -90,15 +93,38 @@ public:
 
     //Get state
     uint32_t    decisionLevel() const;      ///<Returns current decision level
-    size_t      getTrailSize() const;       ///<Return trail size (MUST be called at decision level 0)
+    size_t      getTrailSize() const; //number of variables set at decision level 0
     size_t trail_size() const {
         return trail.size();
+    }
+    Lit trail_at(size_t at) const {
+        return trail[at];
     }
     bool propagate_occur();
     PropStats propStats;
     template<bool update_bogoprops = true>
     void enqueue(const Lit p, const PropBy from = PropBy());
     void new_decision_level();
+    vector<double> var_act_vsids;
+    vector<double> var_act_maple;
+
+    //Variable activities
+    struct VarOrderLt { ///Order variables according to their activities
+        const vector<double>&  activities;
+        bool operator () (const uint32_t x, const uint32_t y) const
+        {
+            return activities[x] > activities[y];
+        }
+
+        explicit VarOrderLt(const vector<double>& _activities) :
+            activities(_activities)
+        {}
+    };
+
+    ///activity-ordered heap of decision variables.
+    ///NOT VALID WHILE SIMPLIFYING
+    Heap<VarOrderLt> order_heap_vsids;
+    Heap<VarOrderLt> order_heap_maple;
 
 protected:
     int64_t simpDB_props = 0;
@@ -121,7 +147,7 @@ protected:
     uint32_t            qhead;            ///< Head of queue (as index into the trail)
     Lit                 failBinLit;       ///< Used to store which watches[lit] we were looking through when conflict occured
 
-    friend class Gaussian;
+    friend class EGaussian;
 
     template<bool update_bogoprops>
     PropBy propagate_any_order();
@@ -134,7 +160,6 @@ protected:
         , const Lit p
         , PropBy& confl
     );*/
-    PropBy propagateIrredBin();  ///<For debug purposes, to test binary clause removal
     PropResult prop_normal_helper(
         Clause& c
         , ClOffset offset
@@ -142,49 +167,47 @@ protected:
         , const Lit p
     );
     PropResult handle_normal_prop_fail(Clause& c, ClOffset offset, PropBy& confl);
-    PropResult handle_prop_tri_fail(
-        Watched* i
-        , Lit lit1
-        , PropBy& confl
-    );
 
     /////////////////
     // Operations on clauses:
     /////////////////
-    virtual void attachClause(
+    void attachClause(
         const Clause& c
         , const bool checkAttach = true
     );
-    virtual void detach_tri_clause(
-        Lit lit1
-        , Lit lit2
-        , Lit lit3
-        , bool red
-        , bool allow_empty_watch = false
-    );
-    virtual void detach_bin_clause(
+
+    void detach_bin_clause(
         Lit lit1
         , Lit lit2
         , bool red
         , bool allow_empty_watch = false
-    );
-    virtual void attach_bin_clause(
+        , bool allow_change_order = false
+    ) {
+        if (!allow_change_order) {
+            if (!(allow_empty_watch && watches[lit1].empty())) {
+                removeWBin(watches, lit1, lit2, red);
+            }
+            if (!(allow_empty_watch && watches[lit2].empty())) {
+                removeWBin(watches, lit2, lit1, red);
+            }
+        } else {
+            if (!(allow_empty_watch && watches[lit1].empty())) {
+                removeWBin_change_order(watches, lit1, lit2, red);
+            }
+            if (!(allow_empty_watch && watches[lit2].empty())) {
+                removeWBin_change_order(watches, lit2, lit1, red);
+            }
+        }
+    }
+    void attach_bin_clause(
         const Lit lit1
         , const Lit lit2
         , const bool red
         , const bool checkUnassignedFirst = true
     );
-    virtual void attach_tri_clause(
+    void detach_modified_clause(
         const Lit lit1
         , const Lit lit2
-        , const Lit lit3
-        , const bool red
-        , const bool checkUnassignedFirst = true
-    );
-    virtual void detach_modified_clause(
-        const Lit lit1
-        , const Lit lit2
-        , const uint32_t origSize
         , const Clause* address
     );
 
@@ -195,7 +218,6 @@ protected:
     void     print_trail();
 
     //Var selection, activity, etc.
-    void sortWatched();
     void updateVars(
         const vector<uint32_t>& outerToInter
         , const vector<uint32_t>& interToOuter
@@ -214,52 +236,14 @@ protected:
     }
 
 private:
-    bool propagate_tri_clause_occur(const Watched& ws);
     bool propagate_binary_clause_occur(const Watched& ws);
     bool propagate_long_clause_occur(const ClOffset offset);
-
     template<bool update_bogoprops = true>
     bool prop_bin_cl(
         const Watched* i
         , const Lit p
         , PropBy& confl
     ); ///<Propagate 2-long clause
-
-    ///Propagate 3-long clause
-    PropResult propTriHelperSimple(
-        const Lit lit1
-        , const Lit lit2
-        , const Lit lit3
-        , const bool red
-    );
-    template<bool update_bogoprops = true>
-    void propTriHelperAnyOrder(
-        const Lit lit1
-        , const Lit lit2
-        , const Lit lit3
-        , const bool red
-    );
-    void update_glue(Clause& c);
-
-    PropResult prop_tri_cl_strict_order (
-        Watched* i
-        , const Lit p
-        , PropBy& confl
-    );
-    template<bool update_bogoprops = true>
-    bool prop_tri_cl_any_order(
-        Watched* i
-        , const Lit lit1
-        , PropBy& confl
-    );
-
-    ///Propagate >3-long clause
-    PropResult prop_long_cl_strict_order(
-        Watched* i
-        , Watched*& j
-        , const Lit p
-        , PropBy& confl
-    );
     template<bool update_bogoprops>
     bool prop_long_cl_any_order(
         Watched* i
@@ -293,9 +277,11 @@ inline uint32_t PropEngine::nAssigns() const
 
 inline size_t PropEngine::getTrailSize() const
 {
-    assert(decisionLevel() == 0);
-
-    return trail.size();
+    if (decisionLevel() == 0) {
+        return trail.size();
+    } else {
+        return trail_lim[0];
+    }
 }
 
 inline bool PropEngine::satisfied(const BinaryClause& bin)
@@ -420,12 +406,33 @@ void PropEngine::enqueue(const Lit p, const PropBy from)
         watches.prefetch((~p).toInt());
     }
 
+    if (!update_bogoprops && !VSIDS && from != PropBy()) {
+        varData[v].last_picked = sumConflicts;
+        varData[v].conflicted = 0;
+
+        assert(sumConflicts >= varData[v].cancelled);
+        uint32_t age = sumConflicts - varData[v].cancelled;
+        if (age > 0) {
+            double decay = std::pow(0.95, age);
+            var_act_maple[v] *= decay;
+            if (order_heap_maple.inHeap(v))
+                order_heap_maple.increase(v);
+        }
+    }
+
     const bool sign = p.sign();
     assigns[v] = boolToLBool(!sign);
     varData[v].reason = from;
     varData[v].level = decisionLevel();
     if (!update_bogoprops) {
         varData[v].polarity = !sign;
+        #ifdef STATS_NEEDED
+        if (sign) {
+            propStats.varSetNeg++;
+        } else {
+            propStats.varSetPos++;
+        }
+        #endif
     }
     trail.push_back(p);
 
@@ -433,17 +440,33 @@ void PropEngine::enqueue(const Lit p, const PropBy from)
         propStats.bogoProps += 1;
     }
 
-    #ifdef STATS_NEEDED
-    if (sign) {
-        propStats.varSetNeg++;
-    } else {
-        propStats.varSetPos++;
-    }
-    #endif
-
     #ifdef ANIMATE3D
     std::cerr << "s " << v << " " << p.sign() << endl;
     #endif
+}
+
+inline void PropEngine::attach_bin_clause(
+    const Lit lit1
+    , const Lit lit2
+    , const bool red
+    , const bool
+    #ifdef DEBUG_ATTACH
+    checkUnassignedFirst
+    #endif
+) {
+    #ifdef DEBUG_ATTACH
+    assert(lit1.var() != lit2.var());
+    if (checkUnassignedFirst) {
+        assert(value(lit1.var()) == l_Undef);
+        assert(value(lit2) == l_Undef || value(lit2) == l_False);
+    }
+
+    assert(varData[lit1.var()].removed == Removed::none);
+    assert(varData[lit2.var()].removed == Removed::none);
+    #endif //DEBUG_ATTACH
+
+    watches[lit1].push(Watched(lit2, red));
+    watches[lit2].push(Watched(lit1, red));
 }
 
 } //end namespace

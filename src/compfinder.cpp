@@ -1,24 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
 
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include <set>
 #include <map>
@@ -134,7 +134,7 @@ void CompFinder::print_and_add_to_sql_result(const double myTime) const
 
     assert(reverse_table_is_correct());
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout
         << "c [comp] Found component(s): " <<  reverseTable.size()
         << " BP: "
@@ -175,7 +175,6 @@ void CompFinder::add_clauses_to_component(const vector<ClOffset>& cs)
 void CompFinder::addToCompImplicits()
 {
     vector<Lit> lits;
-    vector<uint16_t>& seen = solver->seen;
 
     for (size_t var = 0; var < solver->nVars(); var++) {
         if (bogoprops_remain <= 0) {
@@ -195,7 +194,7 @@ void CompFinder::addToCompImplicits()
             if (ws.empty())
                 continue;
 
-            bogoprops_remain -= ws.size() + 10;
+            bogoprops_remain -= (int64_t)ws.size() + 10;
             for(const Watched *it2 = ws.begin(), *end2 = ws.end()
                 ; it2 != end2
                 ; it2++
@@ -209,24 +208,6 @@ void CompFinder::addToCompImplicits()
                     if (!seen[it2->lit2().var()]) {
                         lits.push_back(it2->lit2());
                         seen[it2->lit2().var()] = 1;
-                    }
-                }
-
-                if (it2->isTri()
-                    //irredundant
-                    && !it2->red()
-                    //Only do each tri once
-                    && lit < it2->lit3()
-                    && it2->lit2() < it2->lit3()
-                ) {
-                    if (!seen[it2->lit2().var()]) {
-                        lits.push_back(it2->lit2());
-                        seen[it2->lit2().var()] = 1;
-                    }
-
-                    if (!seen[it2->lit3().var()]) {
-                        lits.push_back(it2->lit3());
-                        seen[it2->lit3().var()] = 1;
                     }
                 }
             }
@@ -252,7 +233,7 @@ template<class T>
 bool CompFinder::belong_to_same_component(const T& cl)
 {
     if (table[cl[0].var()] != std::numeric_limits<uint32_t>::max()) {
-        bogoprops_remain -= cl.size()/2 + 1;
+        bogoprops_remain -= (int64_t)cl.size()/2 + 1;
         const uint32_t comp = table[cl[0].var()];
 
         for (const Lit l: cl) {
@@ -270,7 +251,7 @@ bool CompFinder::belong_to_same_component(const T& cl)
 template<class T>
 void CompFinder::fill_newset_and_tomerge(const T& cl)
 {
-    bogoprops_remain -= cl.size()*2;
+    bogoprops_remain -= (int64_t)cl.size()*2;
 
     for (const Lit lit: cl) {
         if (table[lit.var()] != std::numeric_limits<uint32_t>::max()
@@ -327,12 +308,12 @@ void CompFinder::add_clause_to_component(const T& cl)
         seen[merge] = 0;
 
         //Find in reverseTable
-        bogoprops_remain -= reverseTable.size()*2;
+        bogoprops_remain -= (int64_t)reverseTable.size()*2;
         map<uint32_t, vector<uint32_t> >::iterator it2 = reverseTable.find(merge);
         assert(it2 != reverseTable.end());
 
         //Add them all
-        bogoprops_remain -= it2->second.size();
+        bogoprops_remain -= (int64_t)it2->second.size();
         newSet.insert(
             newSet.end()
             , it2->second.begin()
@@ -340,7 +321,7 @@ void CompFinder::add_clause_to_component(const T& cl)
         );
 
         //Delete this comp
-        bogoprops_remain -= reverseTable.size();
+        bogoprops_remain -= (int64_t)reverseTable.size();
         reverseTable.erase(it2);
         used_comp_no--;
     }
@@ -350,7 +331,7 @@ void CompFinder::add_clause_to_component(const T& cl)
         return;
 
     //Mark all lits not belonging to seen components as belonging to comp_no
-    bogoprops_remain -= newSet.size();
+    bogoprops_remain -= (int64_t)newSet.size();
     for (const uint32_t v: newSet) {
         table[v] = comp_no;
     }

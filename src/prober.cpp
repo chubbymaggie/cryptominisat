@@ -1,23 +1,25 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
 
 #include "prober.h"
 
@@ -71,7 +73,7 @@ void Prober::checkOTFRatio()
     }
     val++;*/
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout
         << "c [probe] Ratio of hyperbin/(bogo+hyperbin) is : "
         << std::setprecision(2) << ratio
@@ -86,10 +88,10 @@ void Prober::checkOTFRatio()
             > time_limit
         && ratio < solver->conf.otf_hyper_ratio_limit
         && solver->conf.otfHyperbin
-        && !solver->drat->enabled()
+        && !(solver->drat->enabled() || solver->conf.simulate_drat)
     ) {
         solver->conf.otfHyperbin = false;
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout << "c [probe] no longer doing OTF hyper-bin&trans-red" << endl;
         }
         solver->needToAddBinClause.clear();
@@ -113,33 +115,35 @@ void Prober::reset_stats_and_state()
     propValue.resize(solver->nVars());
 }
 
-uint64_t Prober::calc_numpropstodo()
+uint64_t Prober::calc_num_props_limit()
 {
-    uint64_t numPropsTodo = solver->conf.probe_bogoprops_time_limitM*1000ULL*1000ULL;
+    uint64_t num_props_limit = solver->conf.probe_bogoprops_time_limitM
+        *solver->conf.global_timeout_multiplier
+        *1000ULL*1000ULL;
 
     //Bogoprops for hyper-bin is MUCH more precise, so if no propagateFull???
     //then mush less bogoProps will lead to the same amount of time
     if (!solver->conf.otfHyperbin) {
-        numPropsTodo /= 4;
+        num_props_limit /= 4;
     }
 
     //Account for cache being too small
     const size_t num_active_vars = solver->num_active_vars();
     if (num_active_vars < 50LL*1000LL) {
-        numPropsTodo *= 1.2;
+        num_props_limit *= 1.2;
     }
     if (solver->litStats.redLits + solver->litStats.irredLits  < 2LL*1000LL*1000LL) {
-        numPropsTodo *= 1.2;
+        num_props_limit *= 1.2;
     }
     if (num_active_vars > 600LL*1000LL) {
-        numPropsTodo *= 0.8;
+        num_props_limit *= 0.8;
     }
     if (solver->litStats.redLits + solver->litStats.irredLits > 20LL*1000LL*1000LL) {
-        numPropsTodo *= 0.8;
+        num_props_limit *= 0.8;
     }
 
     runStats.origNumFreeVars = num_active_vars;
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
     cout
         << "c [probe] lits : "
         << std::setprecision(2) << (double)(solver->litStats.redLits + solver->litStats.irredLits)/(1000.0*1000.0)
@@ -147,11 +151,11 @@ uint64_t Prober::calc_numpropstodo()
         << " act vars: "
         << std::setprecision(2) << (double)num_active_vars/1000.0 << "K"
         << " BP+HP todo: "
-        << std::setprecision(2) << (double)numPropsTodo/(1000.0*1000.0) << "M"
+        << std::setprecision(2) << (double)num_props_limit/(1000.0*1000.0) << "M"
         << endl;
     }
 
-    return numPropsTodo;
+    return num_props_limit;
 }
 
 void Prober::clean_clauses_before_probe()
@@ -165,7 +169,7 @@ void Prober::clean_clauses_before_probe()
     }
 }
 
-uint64_t Prober::update_numpropstodo_based_on_prev_performance(uint64_t numPropsTodo)
+uint64_t Prober::update_num_props_limit_based_on_prev_perf(uint64_t num_props_limit)
 {
      //If failed var searching is going good, do successively more and more of it
     const double percentEffectLast =
@@ -191,22 +195,22 @@ uint64_t Prober::update_numpropstodo_based_on_prev_performance(uint64_t numProps
         numPropsMultiplier = 1.0;
     }
 
-    numPropsTodo = (double)numPropsTodo * numPropsMultiplier;
-    const size_t numPropsTodoAftPerf = numPropsTodo;
-    numPropsTodo = (double)numPropsTodo * std::pow((double)(globalStats.numCalls+1), 0.3);
+    num_props_limit = (double)num_props_limit * numPropsMultiplier;
+    const size_t num_props_limitAftPerf = num_props_limit;
+    num_props_limit = (double)num_props_limit * std::pow((double)(globalStats.numCalls+1), 0.3);
 
     if (solver->conf.verbosity >=2 ) {
         cout
         << "c [probe] NumProps after perf multi: "
-        << std::setprecision(2) << (double)numPropsTodoAftPerf/(1000.0*1000.0)
+        << std::setprecision(2) << (double)num_props_limitAftPerf/(1000.0*1000.0)
         << "M"
         << " after numcall multi: "
-        << std::setprecision(2) << (double)numPropsTodo/(1000.0*1000.0)
+        << std::setprecision(2) << (double)num_props_limit/(1000.0*1000.0)
         << "M (<- final)"
         << endl;
     }
 
-    return numPropsTodo;
+    return num_props_limit;
 }
 
 void Prober::clean_clauses_after_probe()
@@ -245,11 +249,11 @@ void Prober::clean_clauses_after_probe()
     }
 }
 
-void Prober::check_if_must_disable_otf_hyperbin_and_tred(const uint64_t numPropsTodo)
+void Prober::check_if_must_disable_otf_hyperbin_and_tred(const uint64_t num_props_limit)
 {
     const double ratioUsedTime = float_div(
         solver->propStats.bogoProps + solver->propStats.otfHyperTime + extraTime
-        , numPropsTodo);
+        , num_props_limit);
     if (solver->conf.otfHyperbin
         //Visited less than half
         && float_div(runStats.numVisited, runStats.origNumFreeVars) < 0.8
@@ -274,7 +278,7 @@ void Prober::check_if_must_disable_cache_update()
     //More than 50% of the time is spent updating the cache... that's a lot
     //Disable and free
     if (timeOnCache > 50.0 && solver->conf.doCache)  {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
             << "c [probe] too much time spent on updating cache: "
             << std::fixed << std::setprecision(1) << timeOnCache
@@ -285,7 +289,7 @@ void Prober::check_if_must_disable_cache_update()
         solver->conf.doCache = false;
         solver->implCache.free();
     } else {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
             << "c [probe] time spent updating cache during probing: "
             << std::fixed << std::setprecision(1) << timeOnCache
@@ -322,17 +326,18 @@ vector<uint32_t> Prober::randomize_possible_choices()
 
 bool Prober::probe(vector<uint32_t>* probe_order)
 {
+    assert(solver->ok);
+    assert(solver->qhead == solver->trail.size());
     assert(solver->decisionLevel() == 0);
     assert(solver->nVars() > 0);
-    solver->test_all_clause_attached();
 
     clean_clauses_before_probe();
     reset_stats_and_state();
-    uint64_t numPropsTodo = calc_numpropstodo();
+    uint64_t num_props_limit = calc_num_props_limit();
 
     const double myTime = cpuTime();
     const size_t origTrailSize = solver->trail_size();
-    numPropsTodo = update_numpropstodo_based_on_prev_performance(numPropsTodo);
+    num_props_limit = update_num_props_limit_based_on_prev_perf(num_props_limit);
 
     if (probe_order == NULL) {
         randomize_possible_choices();
@@ -350,11 +355,11 @@ bool Prober::probe(vector<uint32_t>* probe_order)
 
     assert(solver->propStats.bogoProps == 0);
     assert(solver->propStats.otfHyperTime == 0);
-    single_prop_tout = (double)numPropsTodo *solver->conf.single_probe_time_limit_perc;
+    single_prop_tout = (double)num_props_limit *solver->conf.single_probe_time_limit_perc;
 
     for(size_t i = 0
         ; i < vars_to_probe.size()
-        && limit_used() < numPropsTodo
+        && limit_used() < num_props_limit
         && !solver->must_interrupt_asap()
         ; i++
     ) {
@@ -397,7 +402,7 @@ end:
         cout << "c main loop for " << __func__
         << " finished: "
         << " must_interrupt? " << solver->must_interrupt_asap()
-        << " limit_used? " << (limit_used() >= numPropsTodo)
+        << " limit_used? " << (limit_used() >= num_props_limit)
         << endl;
     }
 
@@ -412,15 +417,14 @@ end:
         clean_clauses_after_probe();
     }
 
-    update_and_print_stats(myTime, numPropsTodo);
-    check_if_must_disable_otf_hyperbin_and_tred(numPropsTodo);
+    update_and_print_stats(myTime, num_props_limit);
+    check_if_must_disable_otf_hyperbin_and_tred(num_props_limit);
     check_if_must_disable_cache_update();
 
-    solver->test_all_clause_attached();
-    return solver->ok;
+    return solver->okay();
 }
 
-void Prober::update_and_print_stats(const double myTime, const uint64_t numPropsTodo)
+void Prober::update_and_print_stats(const double myTime, const uint64_t num_props_limit)
 {
     for(size_t i = 0; i < visitedAlready.size(); i++) {
         if (visitedAlready[i])
@@ -428,17 +432,17 @@ void Prober::update_and_print_stats(const double myTime, const uint64_t numProps
     }
     lastTimeZeroDepthAssings = runStats.zeroDepthAssigns;
     const double time_used = cpuTime() - myTime;
-    const bool time_out = (limit_used() > numPropsTodo);
-    const double time_remain = float_div((int64_t)numPropsTodo-(int64_t)limit_used(), numPropsTodo);
+    const bool time_out = (limit_used() > num_props_limit);
+    const double time_remain = float_div((int64_t)num_props_limit-(int64_t)limit_used(), num_props_limit);
     runStats.cpu_time = time_used;
     runStats.propStats = solver->propStats;
-    runStats.timeAllocated += numPropsTodo;
+    runStats.timeAllocated += num_props_limit;
     runStats.numCalls = 1;
     globalStats += runStats;
 
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         if (solver->conf.verbosity >= 3)
-            runStats.print(solver->nVars());
+            runStats.print(solver->nVarsOuter(), solver->conf.do_print_times);
         else
             runStats.print_short(solver, time_out, time_remain);
     }
@@ -496,6 +500,12 @@ void Prober::update_cache(Lit thisLit, Lit lit, size_t numElemsSet)
             && solver->varData[ancestor.var()].removed == Removed::none
         ) {
             toEnqueue.push_back(~ancestor);
+            (*solver->drat) << add << ~ancestor
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
             if (solver->conf.verbosity >= 10)
                 cout << "c Tautology from cache indicated we can enqueue " << (~ancestor) << endl;
         }
@@ -507,7 +517,7 @@ void Prober::update_cache(Lit thisLit, Lit lit, size_t numElemsSet)
     }
 }
 
-void Prober::check_and_set_both_prop(uint32_t var, bool first)
+void Prober::check_and_set_both_prop(Lit probed_lit, uint32_t var, bool first)
 {
     //If this is the first, set what is propagated
     if (first) {
@@ -528,7 +538,24 @@ void Prober::check_and_set_both_prop(uint32_t var, bool first)
             //they both imply the same
             const Lit litToEnq = Lit(var, !propValue[var]);
             toEnqueue.push_back(litToEnq);
-            (*solver->drat) << litToEnq << fin;
+            (*solver->drat) << add << probed_lit << litToEnq
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
+            (*solver->drat) << add << ~probed_lit << litToEnq
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
+            (*solver->drat) << add << litToEnq
+            #ifdef STATS_NEEDED
+            << solver->clauseID++
+            << solver->sumConflicts
+            #endif
+            << fin;
 
             if (solver->conf.verbosity >= 10)
                 cout << "c Bothprop indicated to enqueue " << litToEnq << endl;
@@ -561,7 +588,12 @@ void Prober::add_rest_of_lits_to_cache(Lit lit)
     //~lit V OTHER, and ~lit V ~OTHER are technically in
     if (taut) {
         toEnqueue.push_back(~lit);
-        (*solver->drat) << ~lit << fin;
+        (*solver->drat) << add << ~lit
+        #ifdef STATS_NEEDED
+        << solver->clauseID++
+        << solver->sumConflicts
+        #endif
+        << fin;
     }
 }
 
@@ -570,17 +602,17 @@ bool Prober::check_timeout_due_to_hyperbin()
     //If we timed out on ONE call, turn otf hyper-bin off
     //and return --> the "visitedAlready" will be wrong
     if (solver->timedOutPropagateFull
-        && !solver->drat->enabled()
+        && !(solver->drat->enabled() || solver->conf.simulate_drat)
     ) {
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout
-            << "c [probe] intra-propagation timout,"
+            << "c [probe] intra-propagation timeout,"
             << " turning off OTF hyper-bin&trans-red"
             << endl;
         }
 
         solver->conf.otfHyperbin = false;
-        solver->cancelUntil<false>(0);
+        solver->cancelUntil<false, true>(0);
 
         runStats.addedBin += solver->hyper_bin_res_all();
         std::pair<size_t, size_t> tmp = solver->remove_useless_bins();
@@ -640,7 +672,7 @@ bool Prober::try_this(const Lit lit, const bool first)
             const uint32_t var = thisLit.var();
 
             if (solver->conf.doBothProp) {
-                check_and_set_both_prop(var, first);
+                check_and_set_both_prop(lit, var, first);
             }
             visitedAlready[thisLit.toInt()] = 1;
             if (solver->conf.otfHyperbin) {
@@ -655,9 +687,9 @@ bool Prober::try_this(const Lit lit, const bool first)
         }
     }
 
-    solver->cancelUntil<false>(0);
-    solver->add_otf_subsume_long_clauses();
-    solver->add_otf_subsume_implicit_clause();
+    solver->cancelUntil<false, true>(0);
+    solver->add_otf_subsume_long_clauses<true>();
+    solver->add_otf_subsume_implicit_clause<true>();
     runStats.addedBin += solver->hyper_bin_res_all();
     std::pair<size_t, size_t> tmp = solver->remove_useless_bins();
     runStats.removedIrredBin += tmp.first;
@@ -678,7 +710,7 @@ bool Prober::try_this(const Lit lit, const bool first)
         lits.push_back(~failed);
         solver->add_clause_int(lits, true);
         clear_up_before_first_set();
-        return solver->ok;
+        return solver->okay();
     } else {
         assert(solver->ok);
         runStats.bothSameAdded += toEnqueue.size();
@@ -693,7 +725,7 @@ bool Prober::propagate(Lit& failed)
         //Set timeout for ONE enqueue. This used so that in case ONE enqueue
         //takes too long (usually because of hyper-bin), we exit early
         uint64_t timeout = std::numeric_limits<uint64_t>::max();
-        if (!solver->drat->enabled()) {
+        if (!(solver->drat->enabled() || solver->conf.simulate_drat)) {
             timeout = solver->propStats.otfHyperTime
             + solver->propStats.bogoProps
             + single_prop_tout;
@@ -821,7 +853,7 @@ size_t Prober::mem_used() const
 //     << " time: " << (cpuTime() - myTime)
 //     << endl;
 //
-//     return solver->ok;
+//     return solver->okay();
 // }
 //
 // const bool Prober::tryMultiLevel(const vector<uint32_t>& vars, uint32_t& enqueued, uint32_t& finished, uint32_t& numFailed)
@@ -879,7 +911,7 @@ size_t Prober::mem_used() const
 //     solver->ok = solver->propagate().isNULL();
 //     //std::exit(-1);
 //
-//     return solver->ok;
+//     return solver->okay();
 // }
 
 void Prober::Stats::print_short(const Solver* solver, const bool time_out, const double time_remain) const

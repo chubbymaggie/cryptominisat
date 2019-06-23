@@ -1,26 +1,27 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
 
-#ifndef _SOLVE_FEATURES_H_
-#define _SOLVE_FEATURES_H_
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
+
+#ifndef SOLVE_FEATURES_H_
+#define SOLVE_FEATURES_H_
 
 #include <limits>
 #include <cstdint>
@@ -35,43 +36,42 @@ struct SolveFeatures
     //Some parameter
     double eps = 0.00001;
 
-    int numVars;
-    int numClauses;
-    double var_cl_ratio;
+    int numVars = 0;
+    int numClauses = 0;
+    double var_cl_ratio = 0;
 
     //Clause distribution
     double binary = 0;
-    double trinary = 0;
     double horn = 0;
     double horn_mean = 0;
     double horn_std = 0;
     double horn_min = std::numeric_limits<double>::max();
     double horn_max = std::numeric_limits<double>::min();
-    double horn_spread;
+    double horn_spread = 0;
 
     double vcg_var_mean = 0;
     double vcg_var_std = 0;
     double vcg_var_min = std::numeric_limits<double>::max();
     double vcg_var_max = std::numeric_limits<double>::min();
-    double vcg_var_spread;
+    double vcg_var_spread = 0;
 
     double vcg_cls_mean = 0;
     double vcg_cls_std = 0;
     double vcg_cls_min = std::numeric_limits<double>::max();
     double vcg_cls_max = std::numeric_limits<double>::min();
-    double vcg_cls_spread;
+    double vcg_cls_spread = 0;
 
     double pnr_var_mean = 0;
     double pnr_var_std = 0;
     double pnr_var_min = std::numeric_limits<double>::max();
     double pnr_var_max = std::numeric_limits<double>::min();
-    double pnr_var_spread;
+    double pnr_var_spread = 0;
 
     double pnr_cls_mean = 0;
     double pnr_cls_std = 0;
     double pnr_cls_min = std::numeric_limits<double>::max();
     double pnr_cls_max = std::numeric_limits<double>::min();
-    double pnr_cls_spread;
+    double pnr_cls_spread = 0;
 
     //Conflict clauses
     double avg_confl_size = 0.0;
@@ -84,7 +84,6 @@ struct SolveFeatures
     double num_resolutions_min = 0.0;
     double num_resolutions_max = 0.0;
     double learnt_bins_per_confl = 0;
-    double learnt_tris_per_confl = 0;
 
     //Search
     double avg_branch_depth = 0.0;
@@ -113,10 +112,10 @@ struct SolveFeatures
     Distrib red_cl_distrib;
 
     //High-level features
-    uint64_t num_gates_found_last;
-    uint64_t num_xors_found_last;
+    uint64_t num_gates_found_last = 0;
+    uint64_t num_xors_found_last = 0;
 };
 
 }
 
-#endif //_SOLVE_FEATURES_H_
+#endif //SOLVE_FEATURES_H_

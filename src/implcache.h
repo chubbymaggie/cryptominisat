@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef TRANSCACHE_H
 #define TRANSCACHE_H
@@ -98,7 +99,6 @@ public:
         , const uint32_t leaveOut //Leave this literal out
         , vector<uint16_t>& seen
     );
-    void makeAllRed();
 
     void updateVars(
         const std::vector< uint32_t >& outerToInter
@@ -130,7 +130,6 @@ public:
     void print_stats(const Solver* solver) const;
     void print_statsSort(const Solver* solver) const;
     size_t mem_used() const;
-    void makeAllRed();
     void save_on_var_memorys(uint32_t newNumVars)
     {
         implCache.resize(newNumVars*2);
@@ -177,7 +176,7 @@ public:
 
     void new_vars(const size_t n)
     {
-        implCache.resize(implCache.size()+2*n);
+        implCache.insert(implCache.end(), 2*n, TransCache());
     }
 
     size_t size() const
@@ -247,7 +246,7 @@ private:
         , Lit lit
     );
 
-    vector<std::pair<vector<Lit>, bool> > delayedClausesToAddXor;
+    vector< std::pair<std::pair<Lit, Lit>, bool> > delayedClausesToAddXor;
     vector<Lit> delayedClausesToAddNorm;
     bool addDelayedClauses(Solver* solver);
 };

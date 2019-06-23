@@ -22,7 +22,7 @@ THE SOFTWARE.
 */
 
 #include "signalcode.h"
-#include "cryptominisat4/cryptominisat.h"
+#include "cryptominisat5/cryptominisat.h"
 #if !defined (_MSC_VER)
 #include <unistd.h>
 #endif
@@ -51,7 +51,7 @@ void SIGINT_handler(int)
         << endl;
     } else {
         if (solver->nVars() > 0) {
-            //if (conf.verbosity >= 1) {
+            //if (conf.verbosity) {
                 solver->add_in_partial_solving_stats();
                 solver->print_stats();
             //}

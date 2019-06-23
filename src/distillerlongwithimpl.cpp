@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "distillerlongwithimpl.h"
 #include "clausecleaner.h"
@@ -79,7 +80,7 @@ bool DistillerLongWithImpl::distill_long_with_implicit(const bool alsoStrengthen
 
 end:
     globalStats += runStats;
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         if (solver->conf.verbosity >= 3)
             runStats.print();
         else
@@ -87,7 +88,7 @@ end:
     }
     runStats.clear();
 
-    return solver->ok;
+    return solver->okay();
 }
 
 void DistillerLongWithImpl::strengthen_clause_with_watch(
@@ -99,25 +100,8 @@ void DistillerLongWithImpl::strengthen_clause_with_watch(
         && seen[lit.toInt()] //We haven't yet removed it
     ) {
         if (seen[(~wit->lit2()).toInt()]) {
-            thisRemLitBinTri++;
+            thisremLitBin++;
             seen[(~wit->lit2()).toInt()] = 0;
-        }
-    }
-
-    //Strengthening w/ tri
-    if (wit->isTri()
-        && seen[lit.toInt()] //We haven't yet removed it
-    ) {
-        if (seen[(wit->lit2()).toInt()]) {
-            if (seen[(~wit->lit3()).toInt()]) {
-                thisRemLitBinTri++;
-                seen[(~wit->lit3()).toInt()] = 0;
-            }
-        } else if (seen[wit->lit3().toInt()]) {
-            if (seen[(~wit->lit2()).toInt()]) {
-                thisRemLitBinTri++;
-                seen[(~wit->lit2()).toInt()] = 0;
-            }
         }
     }
 }
@@ -139,7 +123,7 @@ bool DistillerLongWithImpl::subsume_clause_with_watch(
             solver->binTri.redBins--;
             solver->binTri.irredBins++;
         }
-        cache_based_data.subBinTri++;
+        cache_based_data.subBin++;
         isSubsumed = true;
         return true;
     }
@@ -148,53 +132,6 @@ bool DistillerLongWithImpl::subsume_clause_with_watch(
     if (wit->isBin()
         && !wit->red()
         && !seen2[(~(wit->lit2())).toInt()]
-    ) {
-        seen2[(~(wit->lit2())).toInt()] = 1;
-        lits2.push_back(~(wit->lit2()));
-    }
-
-    if (wit->isTri()) {
-        assert(wit->lit2() < wit->lit3());
-    }
-
-    //Subsumption w/ tri
-    if (wit->isTri()
-        && lit < wit->lit2() //Check only one instance of the TRI clause
-        && seen2[wit->lit2().toInt()]
-        && seen2[wit->lit3().toInt()]
-    ) {
-        //If subsuming irred with redundant, make the redundant into irred
-        if (!cl.red() && wit->red()) {
-            wit->setRed(false);
-            timeAvailable -= (long)solver->watches[wit->lit2()].size()*3;
-            timeAvailable -= (long)solver->watches[wit->lit3()].size()*3;
-            findWatchedOfTri(solver->watches, wit->lit2(), lit, wit->lit3(), true).setRed(false);
-            findWatchedOfTri(solver->watches, wit->lit3(), lit, wit->lit2(), true).setRed(false);
-            solver->binTri.redTris--;
-            solver->binTri.irredTris++;
-        }
-        cache_based_data.subBinTri++;
-        isSubsumed = true;
-        return true;
-    }
-
-    //Extension w/ tri (1)
-    if (wit->isTri()
-        && lit < wit->lit2() //Check only one instance of the TRI clause
-        && !wit->red()
-        && seen2[wit->lit2().toInt()]
-        && !seen2[(~(wit->lit3())).toInt()]
-    ) {
-        seen2[(~(wit->lit3())).toInt()] = 1;
-        lits2.push_back(~(wit->lit3()));
-    }
-
-    //Extension w/ tri (2)
-    if (wit->isTri()
-        && lit < wit->lit2() //Check only one instance of the TRI clause
-        && !wit->red()
-        && !seen2[(~(wit->lit2())).toInt()]
-        && seen2[wit->lit3().toInt()]
     ) {
         seen2[(~(wit->lit2())).toInt()] = 1;
         lits2.push_back(~(wit->lit2()));
@@ -326,7 +263,7 @@ bool DistillerLongWithImpl::sub_str_cl_with_cache_watch_stamp(
     , const bool alsoStrengthen
 ) {
     Clause& cl = *solver->cl_alloc.ptr(offset);
-    assert(cl.size() > 3);
+    assert(cl.size() > 2);
 
     if (solver->conf.verbosity >= 10) {
         cout << "Examining str clause:" << cl << endl;
@@ -337,7 +274,7 @@ bool DistillerLongWithImpl::sub_str_cl_with_cache_watch_stamp(
     tmpStats.triedCls++;
     isSubsumed = false;
     thisRemLitCache = 0;
-    thisRemLitBinTri = 0;
+    thisremLitBin = 0;
 
     //Fill 'seen'
     lits2.clear();
@@ -388,12 +325,13 @@ bool DistillerLongWithImpl::sub_str_cl_with_cache_watch_stamp(
     return remove_or_shrink_clause(cl, offset);
 }
 
+//returns FALSE in case clause is shortened, and TRUE in case it is removed
 bool DistillerLongWithImpl::remove_or_shrink_clause(Clause& cl, ClOffset& offset)
 {
     //Remove or shrink clause
     timeAvailable -= (long)cl.size()*10;
     cache_based_data.remLitCache += thisRemLitCache;
-    cache_based_data.remLitBinTri += thisRemLitBinTri;
+    cache_based_data.remLitBin += thisremLitBin;
     tmpStats.shrinked++;
     timeAvailable -= (long)lits.size()*2 + 50;
     Clause* c2 = solver->add_clause_int(lits, cl.red(), cl.stats);
@@ -470,12 +408,16 @@ bool DistillerLongWithImpl::shorten_all_cl_with_cache_watch_stamp(
     tmpStats.numCalled = 1;
     cache_based_data.clear();
     bool need_to_finish = false;
-    randomise_order_of_clauses(clauses);
+
+    //don't randomise if it's too large.
+    if (clauses.size() < 100*10000*1000) {
+        randomise_order_of_clauses(clauses);
+    }
 
     size_t i = 0;
     size_t j = i;
     ClOffset offset;
-    #ifdef USE_GAUS
+    #ifdef USE_GAUSS
     Clause* cl;
     #endif
     const size_t end = clauses.size();
@@ -497,9 +439,9 @@ bool DistillerLongWithImpl::shorten_all_cl_with_cache_watch_stamp(
             goto copy;
         }
 
-        #ifdef USE_GAUS
-        solver->cl_alloc.ptr(offset);
-        if (cl->_used_in_xor) {
+        #ifdef USE_GAUSS
+        cl = solver->cl_alloc.ptr(offset);
+        if (cl->used_in_xor()) {
             goto copy;
         }
         #endif
@@ -524,7 +466,7 @@ bool DistillerLongWithImpl::shorten_all_cl_with_cache_watch_stamp(
         , orig_time_available
     );
 
-    return solver->ok;
+    return solver->okay();
 }
 
 void DistillerLongWithImpl::dump_stats_for_shorten_all_cl_with_cache_stamp(
@@ -580,12 +522,12 @@ void DistillerLongWithImpl::CacheBasedData::clear()
 
 size_t DistillerLongWithImpl::CacheBasedData::get_cl_subsumed() const
 {
-    return subBinTri + subsumedStamp + subCache;
+    return subBin + subsumedStamp + subCache;
 }
 
 size_t DistillerLongWithImpl::CacheBasedData::get_lits_rem() const
 {
-    return remLitBinTri + remLitCache
+    return remLitBin + remLitCache
         + remLitTimeStampTotal + remLitTimeStampTotalInv;
 }
 
@@ -599,9 +541,9 @@ void DistillerLongWithImpl::CacheBasedData::print() const
     << endl;
 
     cout
-    << "c [distill-with-bin-ext] bintri-based"
-    << " lit-rem: " << remLitBinTri
-    << " cl-sub: " << subBinTri
+    << "c [distill-with-bin-ext] bin-based"
+    << " lit-rem: " << remLitBin
+    << " cl-sub: " << subBin
     << endl;
 
     cout
@@ -618,10 +560,10 @@ DistillerLongWithImpl::Stats& DistillerLongWithImpl::Stats::operator+=(const Sta
     return *this;
 }
 
-void DistillerLongWithImpl::Stats::print_short(const Solver* solver) const
+void DistillerLongWithImpl::Stats::print_short(const Solver* _solver) const
 {
-    irredCacheBased.print_short("irred", solver);
-    redCacheBased.print_short("red", solver);
+    irredCacheBased.print_short("irred", _solver);
+    redCacheBased.print_short("red", _solver);
 }
 
 void DistillerLongWithImpl::Stats::print() const
@@ -636,7 +578,7 @@ void DistillerLongWithImpl::Stats::print() const
 }
 
 
-void DistillerLongWithImpl::Stats::CacheBased::print_short(const string type, const Solver* solver) const
+void DistillerLongWithImpl::Stats::CacheBased::print_short(const string type, const Solver* _solver) const
 {
     cout << "c [distill] cache-based "
     << std::setw(5) << type
@@ -645,7 +587,7 @@ void DistillerLongWithImpl::Stats::CacheBased::print_short(const string type, co
     << " cl-sh " << std::setw(5) << shrinked
     << " cl-rem " << std::setw(4) << numClSubsumed
     << " lit-rem " << std::setw(6) << numLitsRem
-    << solver->conf.print_times(cpu_time, ranOutOfTime)
+    << _solver->conf.print_times(cpu_time, ranOutOfTime)
     << endl;
 }
 
@@ -681,4 +623,13 @@ void DistillerLongWithImpl::Stats::CacheBased::print() const
         , "% ran out of time"
     );
 
+}
+
+double DistillerLongWithImpl::mem_used() const
+{
+    double mem = sizeof(DistillerLongWithImpl);
+    mem+= lits.size()*sizeof(Lit);
+    mem +=lits2.size()*sizeof(Lit);
+
+    return mem;
 }

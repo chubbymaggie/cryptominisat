@@ -29,7 +29,6 @@ THE SOFTWARE.
 #include <vector>
 
 namespace CMSat {
-using namespace CMSat;
 using std::vector;
 
 typedef vec<Watched>& watch_subarray;
@@ -95,6 +94,12 @@ public:
         smudged.resize(new_size, false);
     }
 
+    void insert(uint32_t num)
+    {
+        smudged.insert(smudged.end(), num, false);
+        watches.insert(num);
+    }
+
     size_t mem_used() const
     {
         double mem = watches.capacity()*sizeof(vec<Watched>);
@@ -144,6 +149,14 @@ public:
         /*for(auto& ws: watches) {
             ws.shrink_to_fit();
         }*/
+        watches.shrink_to_fit();
+    }
+
+    void full_consolidate()
+    {
+        for(auto& ws: watches) {
+            ws.shrink_to_fit();
+        }
         watches.shrink_to_fit();
     }
 

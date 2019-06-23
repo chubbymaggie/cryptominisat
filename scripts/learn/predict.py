@@ -1,462 +1,377 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-from __future__ import print_function
-import sqlite3
-import optparse
-import operator
-import numpy
-import time
-import functools
-import glob
-import os
-import copy
+# Copyright (C) 2018  Mate Soos
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; version 2
+# of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+
+import pandas as pd
 import pickle
-import re
-
-from sklearn.preprocessing import StandardScaler
-from sklearn.cross_validation import train_test_split
-import sklearn.linear_model
-import sklearn.tree
+import sklearn
 import sklearn.svm
+import sklearn.tree
 import sklearn.ensemble
+import optparse
+import numpy as np
 import sklearn.metrics
+import time
+import itertools
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 
-#for presentation (PDF)
-
-from sklearn.externals.six import StringIO
-import pydot
-from IPython.display import Image
-
-
-def mypow(to, base):
-    return base**to
-
-
-class Query:
-    def __init__(self, dbfname):
-        self.conn = sqlite3.connect(dbfname)
-        self.c = self.conn.cursor()
-        self.runID = self.find_runID()
-        self.get_clausestats_names()
-        self.rststats_names = self.get_rststats_names()[5:]
-
-    def get_rststats_names(self):
-        names = None
-        for row in self.c.execute("select * from restart limit 1"):
-            names = list(map(lambda x: x[0], self.c.description))
-        return names
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, traceback):
-        self.conn.commit()
-        self.conn.close()
-
-    def find_runID(self):
-        q = """
-        SELECT runID
-        FROM startUp
-        order by startTime desc
-        limit 1
-        """
-
-        runID = None
-        for row in self.c.execute(q):
-            runID = int(row[0])
-
-        print("runID: %d" % runID)
-        return runID
+class_names = ["throw", "longer"]
+cuts = [-1, 20000, 1000000000000]
+class_names2 = ["middle", "longer2"]
+cuts2 = [-1, 40000, 1000000000000]
+class_names3 = ["middle2", "forever"]
+cuts3 = [-1, 100000, 1000000000000]
 
 
-class Query2 (Query):
-    def create_indexes(self):
-        print("Recreating indexes...")
-        t = time.time()
-        q = """
-        drop index if exists `idxclid`;
-        drop index if exists `idxclid2`;
-        drop index if exists `idxclid3`;
+def output_to_dot(clf, features, nameextra):
+    fname = options.dot+nameextra
+    sklearn.tree.export_graphviz(clf, out_file=fname,
+                                 feature_names=features,
+                                 class_names=class_names,
+                                 filled=True, rounded=True,
+                                 special_characters=True,
+                                 proportion=True)
+    print("Run dot:")
+    print("dot -Tpng {fname} -o {fname}.png".format(fname=fname))
+    print("gwenview {fname}.png".format(fname=fname))
 
-        create index `idxclid` on `clauseStats` (`runID`,`clauseID`);
-        create index `idxclid2` on `goodClauses` (`runID`,`clauseID`);
-        create index `idxclid3` on `restart` (`runID`,`clauseIDstartInclusive`, `clauseIDendExclusive`);
-        """
-        for l in q.split('\n'):
-            self.c.execute(l)
 
-        print("indexes created %-3.2f" % (time.time()-t))
+def calc_cross_val():
+    # calculate accuracy/prec/recall for cross-validation
+    accuracy = sklearn.model_selection.cross_val_score(self.clf, X_train, y_train, cv=10)
+    precision = sklearn.model_selection.cross_val_score(self.clf, X_train, y_train, cv=10, scoring='precision')
+    recall = sklearn.model_selection.cross_val_score(self.clf, X_train, y_train, cv=10, scoring='recall')
+    print("cv-accuracy:", accuracy)
+    print("cv-precision:", precision)
+    print("cv-recall:", recall)
+    accuracy = np.mean(accuracy)
+    precision = np.mean(precision)
+    recall = np.mean(recall)
+    print("cv-prec: %-3.4f  cv-recall: %-3.4f cv-accuracy: %-3.4f T: %-3.2f" %
+          (precision, recall, accuracy, (time.time() - t)))
 
-    def get_max_clauseID(self):
-        q = """
-        SELECT max(clauseID)
-        FROM clauseStats
-        WHERE runID = %d
-        """ % self.runID
 
-        max_clID = None
-        for row in self.c.execute(q):
-            max_clID = int(row[0])
+def plot_confusion_matrix(cm, classes,
+                          normalize=False,
+                          title='Confusion matrix',
+                          cmap=plt.cm.Blues):
+    """
+    This function prints and plots the confusion matrix.
+    Normalization can be applied by setting `normalize=True`.
+    """
+    if normalize:
+        cm = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
+        print("Normalized confusion matrix")
+    else:
+        print('Confusion matrix, without normalization')
 
-        return max_clID
+    print(cm)
 
-    def get_rststats(self):
-        q = """
-        select
-            numgood.cnt,
-            restart.clauseIDendExclusive-restart.clauseIDstartInclusive as total,
-            restart.*
-        from
-            restart,
-            (SELECT clauseStats.restarts as restarts, count(clauseStats.clauseID) as cnt
-            FROM ClauseStats, goodClauses
-            WHERE clauseStats.clauseID = goodClauses.clauseID
-            and clauseStats.runID = goodClauses.runID
-            and clauseStats.runID = {0}
-            group by clauseStats.restarts) as numgood
-        where
-            restart.runID = {0}
-            and restart.restarts = numgood.restarts
-        """.format(self.runID)
+    plt.imshow(cm, interpolation='nearest', cmap=cmap)
+    plt.title(title)
+    plt.colorbar()
+    tick_marks = np.arange(len(classes))
+    plt.xticks(tick_marks, classes, rotation=45)
+    plt.yticks(tick_marks, classes)
 
-        X = []
-        y = []
-        for row in self.c.execute(q):
-            r = list(row)
-            good = r[0]
-            total = r[1]
-            perc = float(good)/float(total)
-            r = self.transform_rst_row(r[2:])
-            X.append(r)
-            y.append(perc)
-            #print("---<<<")
-            #print(r)
-            #print(perc)
-            #print("---")
+    fmt = '.2f' if normalize else 'd'
+    thresh = cm.max() / 2.
+    for i, j in itertools.product(range(cm.shape[0]), range(cm.shape[1])):
+        plt.text(j, i, format(cm[i, j], fmt),
+                 horizontalalignment="center",
+                 color="white" if cm[i, j] > thresh else "black")
 
-        return X, y
+    plt.tight_layout()
+    plt.ylabel('True label')
+    plt.xlabel('Predicted label')
 
-    def get_clstats(self):
-        X = []
-        y = []
 
-        q = """
-        SELECT clauseStats.*
-        -- , restart.*
-        FROM clauseStats, goodClauses
-        -- , restart
-        WHERE
+# to check for too large or NaN values:
+def check_too_large_or_nan_values(df):
+    features = df.columns.values.flatten().tolist()
+    index = 0
+    for index, row in df.iterrows():
+        for x, name in zip(row, features):
+            if not np.isfinite(x) or x > np.finfo(np.float32).max:
+                print("issue with data for features: ", name, x)
+            index += 1
 
-        clauseStats.clauseID = goodClauses.clauseID
-        and clauseStats.runID = goodClauses.runID
 
-        -- and restart.clauseIDstartInclusive <= clauseStats.clauseID
-        -- and restart.clauseIDendExclusive > clauseStats.clauseID
+def get_code(tree, feature_names):
+    left = tree.tree_.children_left
+    right = tree.tree_.children_right
+    threshold = tree.tree_.threshold
+    features = [feature_names[i] for i in tree.tree_.feature]
+    value = tree.tree_.value
 
-        and clauseStats.runID = {0}
-        -- and clauseStats.glue <= 20
-        order by RANDOM()
-        limit {1}
-        """.format(self.runID, options.limit)
-        for row in self.c.execute(q):
-            #first 5 are not useful, such as restarts and clauseID
-            r = self.transform_clstat_row(row)
-            X.append(r)
-            y.append(1)
-
-        q = """
-        SELECT clauseStats.*
-        -- , restart.*
-        FROM clauseStats left join goodClauses
-        on clauseStats.clauseID = goodClauses.clauseID
-        and clauseStats.runID = goodClauses.runID
-        -- , restart
-        where
-
-        goodClauses.clauseID is NULL
-        and goodClauses.runID is NULL
-
-        -- and restart.clauseIDstartInclusive <= clauseStats.clauseID
-        -- and restart.clauseIDendExclusive > clauseStats.clauseID
-
-        and clauseStats.runID = {0}
-        -- and clauseStats.glue <= 20
-        order by RANDOM()
-        limit {1}
-        """.format(self.runID, options.limit)
-        for row in self.c.execute(q):
-            #first 5 are not useful, such as restarts and clauseID
-            r = self.transform_clstat_row(row)
-            X.append(r)
-            y.append(0)
-
-        return X, y
-
-    def transform_rst_row(self, row):
-        row = list(row[5:])
-
-        ret = []
-        if options.add_pow2:
-            for x in row:
-                ret.extend([x, x*x])
-
-            return ret
+    def recurse(left, right, threshold, features, node):
+        if (threshold[node] != -2):
+            print("if ( " + features[node] + " <= " + str(threshold[node]) + " ) {")
+            if left[node] != -1:
+                recurse(left, right, threshold, features, left[node])
+            print("} else {")
+            if right[node] != -1:
+                recurse(left, right, threshold, features, right[node])
+            print("}")
         else:
-            return row
+            print("return " + str(value[node]))
 
-    def get_clausestats_names(self):
-        q = """
-        select clauseStats.*
-        from clauseStats
-        limit 1
-        """
-        names = None
-        for row in self.c.execute(q):
-            names = list(map(lambda x: "clauseStats." + x[0], self.c.description))
-
-        q = """
-        select restart.*
-        from restart
-        limit 1
-        """
-        for row in self.c.execute(q):
-            names.extend(list(map(lambda x: "restart." + x[0], self.c.description)))
-
-        print(names)
-
-        if options.add_pow2:
-            orignames = copy.deepcopy(names)
-            for name in orignames:
-                names.append("%s**2" % name)
-
-        self.clstats_names = names
-        self.ntoc = {}
-        for n, c in zip(names, xrange(10000)):
-            #print(n, ":", c)
-            self.ntoc[n] = c
-
-    def transform_clstat_row(self, row):
-        set_to_null = [
-            "clauseStats.runID",
-            "clauseStats.simplifications",
-            "clauseStats.restarts",
-            "clauseStats.conflicts",
-            "clauseStats.clauseID",
-            "clauseStats.conflicts_this_restart"]
-            #"restart.runID",
-            #"restart.simplifications",
-            #"restart.restarts",
-            #"restart.conflicts",
-            #"restart.runtime",
-            #"restart.clauseIDstartInclusive",
-            #"restart.clauseIDendExclusive"]
-
-        row2 = list(row)
-        for e in set_to_null:
-            row_to_reset = self.ntoc[e]
-            row2[row_to_reset] = 0
-
-        row2[self.ntoc["clauseStats.decision_level"]]   /= row[self.ntoc["clauseStats.decision_level_hist"]]
-        row2[self.ntoc["clauseStats.backtrack_level"]]  /= row[self.ntoc["clauseStats.backtrack_level_hist"]]
-        row2[self.ntoc["clauseStats.trail_depth_level"]]/= row[self.ntoc["clauseStats.trail_depth_hist"]]
-        row2[self.ntoc["clauseStats.vsids_vars_avg"]]   /= row[self.ntoc["clauseStats.vsids_vars_hist"]]
-        row2[self.ntoc["clauseStats.size"]]             /= row[self.ntoc["clauseStats.size_hist"]]
-        row2[self.ntoc["clauseStats.glue"]]             /= row[self.ntoc["clauseStats.glue_hist"]]
-        row2[self.ntoc["clauseStats.num_antecedents"]]  /= row[self.ntoc["clauseStats.num_antecedents_hist"]]
-
-        row2[self.ntoc["clauseStats.decision_level_hist"]] = 0
-        row2[self.ntoc["clauseStats.backtrack_level_hist"]] = 0
-        row2[self.ntoc["clauseStats.trail_depth_hist"]] = 0
-        row2[self.ntoc["clauseStats.vsids_vars_hist"]] = 0
-        row2[self.ntoc["clauseStats.size_hist"]] = 0
-        row2[self.ntoc["clauseStats.glue_hist"]] = 0
-        row2[self.ntoc["clauseStats.num_antecedents_hist"]] = 0
-
-        return row2
+    recurse(left, right, threshold, features, 0)
 
 
-class Data:
-    def __init__(self, X, y, colnames):
-        self.X = numpy.array(X)
-        self.y = numpy.array(y)
-        self.colnames = colnames
+def one_classifier(df, features, to_predict, names, w_name, w_number, final):
+    print("================ predicting %s ================" % to_predict)
+    print("-> Number of features  :", len(features))
+    print("-> Number of datapoints:", df.shape)
+    print("-> Predicting          :", to_predict)
 
-    def add(self, other):
-        self.X = numpy.append(self.X, other.X, 0)
-        self.y = numpy.append(self.y, other.y, 0)
-        if len(self.colnames) == 0:
-            self.colnames = other.colnames
-        else:
-            assert self.colnames == other.colnames
+    train, test = train_test_split(df, test_size=0.33)
+    X_train = train[features]
+    y_train = train[to_predict]
+    X_test = test[features]
+    y_test = test[to_predict]
+
+    t = time.time()
+    clf = None
+    # clf = sklearn.linear_model.LogisticRegression()
+    # clf = sklearn.svm.SVC()
+    if final:
+        clf = sklearn.tree.DecisionTreeClassifier(max_depth=options.tree_depth)
+    else:
+        clf = sklearn.ensemble.RandomForestClassifier(n_estimators=80)
+        #clf = sklearn.ensemble.ExtraTreesClassifier(n_estimators=80)
+
+    sample_weight = [w_number if i == w_name else 1 for i in y_train]
+    clf.fit(X_train, y_train, sample_weight=sample_weight)
+
+    print("Training finished. T: %-3.2f" % (time.time() - t))
+
+    best_features = []
+    if not final:
+        importances = clf.feature_importances_
+        std = np.std([tree.feature_importances_ for tree in clf.estimators_], axis=0)
+        indices = np.argsort(importances)[::-1]
+        indices = indices[:options.top_num_features]
+        myrange = min(X_train.shape[1], options.top_num_features)
+
+        # Print the feature ranking
+        print("Feature ranking:")
+
+        for f in range(myrange):
+            print("%-3d  %-35s -- %8.4f" %
+                  (f + 1, features[indices[f]], importances[indices[f]]))
+            best_features.append(features[indices[f]])
+
+        # Plot the feature importances of the clf
+        plt.figure()
+        plt.title("Feature importances")
+        plt.bar(range(myrange), importances[indices],
+                color="r", align="center"
+                , yerr=std[indices])
+        plt.xticks(range(myrange), [features[x] for x in indices], rotation=45)
+        plt.xlim([-1, myrange])
+    else:
+        get_code(clf, features)
+
+    print("Calculating scores....")
+    y_pred = clf.predict(X_test)
+    accuracy = sklearn.metrics.accuracy_score(y_test, y_pred)
+    precision = sklearn.metrics.precision_score(y_test, y_pred, average="macro")
+    recall = sklearn.metrics.recall_score(y_test, y_pred, average="macro")
+    print("prec: %-3.4f  recall: %-3.4f accuracy: %-3.4f T: %-3.2f" % (
+        precision, recall, accuracy, (time.time() - t)))
+
+    if options.confusion:
+        sample_weight = [w_number if i == w_name else 1 for i in y_pred]
+        cnf_matrix = sklearn.metrics.confusion_matrix(
+            y_test, y_pred, labels=names, sample_weight=sample_weight)
+
+        np.set_printoptions(precision=2)
+
+        # Plot non-normalized confusion matrix
+        plt.figure()
+        plot_confusion_matrix(
+            cnf_matrix, classes=names,
+            title='Confusion matrix, without normalization')
+
+        # Plot normalized confusion matrix
+        plt.figure()
+        plot_confusion_matrix(
+            cnf_matrix, classes=names, normalize=True,
+            title='Normalized confusion matrix')
+
+    # TODO do L1 regularization
+
+    if False:
+        calc_cross_val()
+
+    if options.dot is not None and final:
+        output_to_dot(clf, features, names[0])
+
+    return best_features
 
 
-def get_one_file(dbfname):
-    print("Using sqlite3db file %s" % dbfname)
-    clstats_names = None
+def remove_old_clause_features(features):
+    todel = []
+    for name in features:
+        if "cl2" in name or "cl3" in name or "cl4" in name:
+            todel.append(name)
 
-    with Query2(dbfname) as q:
-        q.create_indexes()
-        clstats_names = q.clstats_names
-        X, y = q.get_clstats()
-        assert len(X) == len(y)
-
-    cl_data = Data(X, y, clstats_names)
-
-    return cl_data
+    for x in todel:
+        features.remove(x)
+        if options.verbose:
+            print("Removing old clause feature:", x)
 
 
-class Classify:
-    def learn(self, X, y, classifiername="classifier"):
-        print("number of features:", len(X[0]))
+def rem_features(feat, to_remove):
+    feat_less = list(feat)
+    todel = []
+    for feature in feat:
+        for rem in to_remove:
+            if rem in feature:
+                feat_less.remove(feature)
+                if options.verbose:
+                    print("Removing feature from feat_less:", feature)
 
-        print("total samples: %5d   percentage of good ones %-3.2f" %
-              (len(X), sum(y)/float(len(X))*100.0))
-        #X = StandardScaler().fit_transform(X)
-
-        print("Training....")
-        t = time.time()
-        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2)
-
-        #clf = KNeighborsClassifier(5) # EXPENSIVE at prediction, NOT suitable
-        #self.clf = sklearn.linear_model.LogisticRegression() # NOT good.
-        self.clf = sklearn.tree.DecisionTreeClassifier(max_depth=5)
-        #self.clf = sklearn.ensemble.RandomForestClassifier(min_samples_split=len(X)/20, n_estimators=6)
-        #self.clf = sklearn.svm.SVC(max_iter=1000) # can't make it work too well..
-        self.clf.fit(X_train, y_train)
-        print("Training finished. T: %-3.2f" % (time.time()-t))
-
-        print("Calculating scores....")
-
-        t = time.time()
-        y_pred = self.clf.predict(X_test)
-        recall = sklearn.metrics.recall_score(y_test, y_pred)
-        prec = sklearn.metrics.precision_score(y_test, y_pred)
-        # avg_prec = self.clf.score(X, y)
-        print("prec: %-3.3f  recall: %-3.3f T: %-3.2f" %
-              (prec, recall, (time.time()-t)))
-
-        with open(classifiername, "w") as f:
-            pickle.dump(self.clf, f)
-
-    def output_to_pdf(self, clstats_names, fname):
-        print("clstats_names len:", len(clstats_names))
-        print("clstats_names: %s" % clstats_names)
-
-        #dot_data = StringIO()
-        sklearn.tree.export_graphviz(self.clf, out_file=fname,
-                                     feature_names=clstats_names,
-                                     class_names=["BAD", "GOOD"],
-                                     filled=True, rounded=True,
-                                     special_characters=True,
-                                     proportion=True
-                                     )
-        #graph = pydot.graph_from_dot_data(dot_data.getvalue())
-        print("Run dot:")
-        print("dot -Tpng %s -o tree.png" % fname)
-        #Image(graph.create_png())
-
-        #graph.write_pdf(fname)
-        #print("Wrote final tree to %s" % fname)
+    return feat_less
 
 
-class Check:
-    def __init__(self, classf_fname):
-        with open(classf_fname, "r") as f:
-            self.clf = pickle.load(f)
+def learn(fname):
+    with open(fname, "rb") as f:
+        df = pickle.load(f)
 
-    def check(self, X, y):
-        print("total samples: %5d   percentage of good ones %-3.2f" %
-              (len(X), sum(y)/float(len(X))*100.0))
+    if options.check_row_data:
+        check_too_large_or_nan_values(df)
 
-        t = time.time()
-        y_pred = self.clf.predict(X)
-        recall = sklearn.metrics.recall_score(y, y_pred)
-        prec = sklearn.metrics.precision_score(y, y_pred)
-        # avg_prec = self.clf.score(X, y)
-        print("prec: %-3.3f  recall: %-3.3f T: %-3.2f" %
-              (prec, recall, (time.time()-t)))
+    print("total samples: %5d" % df.shape[0])
+
+    # lifetime to predict
+    df["x.lifetime_cut"] = pd.cut(
+        df["x.lifetime"],
+        cuts,
+        labels=class_names)
+
+    df["x.lifetime_cut2"] = pd.cut(
+        df["x.lifetime"],
+        cuts2,
+        labels=class_names2)
+
+    df["x.lifetime_cut3"] = pd.cut(
+        df["x.lifetime"],
+        cuts3,
+        labels=class_names3)
+
+    features = df.columns.values.flatten().tolist()
+    features = rem_features(features,
+                            ["x.num_used", "x.class", "x.lifetime", "fname"])
+
+    # this needs binarization
+    features = rem_features(features, ["cl.cur_restart_type"])
+    # x = (df["cl.cur_restart_type"].values[:, np.newaxis] == df["cl.cur_restart_type"].unique()).astype(int)
+    # print(x)
+
+    if True:
+        remove_old_clause_features(features)
+
+    if options.raw_data_plots:
+        pd.options.display.mpl_style = "default"
+        df.hist()
+        df.boxplot()
+
+    if options.only_pred is None or options.only_pred == 1:
+        feat_less = rem_features(features, ["rdb1", "rdb2", "rdb3", "rdb4"])
+        best_feats = one_classifier(df, feat_less, "x.lifetime_cut",
+                                    class_names, "longer", 17,
+                                    False)
+        if options.show:
+            plt.show()
+
+        one_classifier(df, best_feats, "x.lifetime_cut",
+                       class_names, "longer", 3,
+                       True)
+        if options.show:
+            plt.show()
+
+    if options.only_pred is None or options.only_pred == 2:
+        feat_less = rem_features(features, ["rdb3", "rdb4"])
+        df2 = df[df["x.lifetime"] > cuts[1]]
+
+        best_feats = one_classifier(df2, feat_less, "x.lifetime_cut2",
+                                    class_names2, "middle", 30,
+                                    False)
+        if options.show:
+            plt.show()
+
+        one_classifier(df2, best_feats, "x.lifetime_cut2",
+                       class_names2, "middle", 4,
+                       True)
+
+        if options.show:
+            plt.show()
+
+    if options.only_pred is None or options.only_pred == 3:
+        df3 = df[df["x.lifetime"] > cuts2[1]]
+
+        best_feats = one_classifier(df3, features, "x.lifetime_cut3",
+                                    class_names3, "middle2", 8,
+                                    False)
+        if options.show:
+            plt.show()
+
+        one_classifier(df3, best_feats, "x.lifetime_cut3",
+                       class_names3, "middle2", 2,
+                       True)
+
+        if options.show:
+            plt.show()
+
 
 if __name__ == "__main__":
-
-    usage = "usage: %prog [options] dir1 [dir2...]"
+    usage = "usage: %prog [options] file.pandas"
     parser = optparse.OptionParser(usage=usage)
 
     parser.add_option("--verbose", "-v", action="store_true", default=False,
                       dest="verbose", help="Print more output")
-
-    parser.add_option("--pow2", "-p", action="store_true", default=False,
-                      dest="add_pow2", help="Add power of 2 of all data")
-
-    parser.add_option("--limit", "-l", default=10**9, type=int,
-                      dest="limit", help="Max number of good/bad clauses")
-
-    parser.add_option("--check", "-c", type=str,
-                      dest="check", help="Check classifier")
-
-    parser.add_option("--data", "-d", action="store_true", default=False,
-                      dest="data", help="Just get the dumped data")
+    parser.add_option("--cross", action="store_true", default=False,
+                      dest="cross_validate", help="Cross-validate prec/recall/acc against training data")
+    parser.add_option("--depth", default=6, type=int,
+                      dest="tree_depth", help="Depth of the tree to create")
+    parser.add_option("--dot", type=str, default=None,
+                      dest="dot", help="Create DOT file")
+    parser.add_option("--conf", action="store_true", default=False,
+                      dest="confusion", help="Create confusion matrix")
+    parser.add_option("--show", action="store_true", default=False,
+                      dest="show", help="Show visual graphs")
+    parser.add_option("--check", action="store_true", default=False,
+                      dest="check_row_data", help="Check row data for NaN or float overflow")
+    parser.add_option("--rawplots", action="store_true", default=False,
+                      dest="raw_data_plots", help="Display raw data plots")
+    parser.add_option("--only", default=None, type=int,
+                      dest="only_pred", help="Only this predictor")
+    parser.add_option("--top", default=12, type=int,
+                      dest="top_num_features", help="Number of top features to take to generate the final predictor")
 
     (options, args) = parser.parse_args()
 
     if len(args) < 1:
-        print("ERROR: You must give at least one directory")
+        print("ERROR: You must give the pandas file!")
         exit(-1)
 
-    cl_data = None
-    for dbfname in args:
-        print("----- INTERMEDIATE predictor -------\n")
-        t = time.time()
-        if options.data:
-            with open(dbfname, "r") as f:
-                cl = pickle.load(f)
-        else:
-            cl = get_one_file(dbfname)
-        print("Read in data in %-5.2f secs" % (time.time()-t))
-
-        #print("cl x:")
-        #print(cl.X)
-        #print("cl data x:")
-        #print(cl_data.X)
-
-        cleanname = re.sub('\.cnf.gz.sqlite$', '', dbfname)
-
-        if options.check:
-            check = Check(options.check)
-            check.check(cl.X, cl.y)
-        else:
-            clf = Classify()
-            clf.learn(cl.X, cl.y, "%s.classifier" % cleanname)
-            clf.output_to_pdf(cl.colnames, "%s.tree.dot" % cleanname)
-            if cl_data is None:
-                cl_data = cl
-            else:
-                cl_data.add(cl)
-
-            with open("%s.cldata" % cleanname, "w") as f:
-                pickle.dump(cl, f)
-
-    if len(args) == 1 or options.check:
-        exit(0)
-
-    print("----- FINAL predictor -------\n")
-    if options.check:
-        check = Check()
-        check.check(cl.X, cl.y)
-    else:
-        clf = Classify()
-        clf.learn(cl_data.X, cl_data.y)
-        print("Columns used were:")
-        for i, name in zip(xrange(100), cl_data.colnames):
-            print("%-3d  %s" % (i, name))
-        clf.output_to_pdf(cl_data.colnames, "final.dot")
-
-        with open("final.cldata", "w") as f:
-            pickle.dump(cl_data, f)
-
-
-
-
-
-
-
+    learn(args[0])

@@ -1,10 +1,28 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+# Copyright (C) 2018  Mate Soos
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; version 2
+# of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+# 02110-1301, USA.
+
 import optparse
 import random
 import time
 import string
+import configparser
 
 
 def parse_arguments():
@@ -18,15 +36,51 @@ def parse_arguments():
 
     usage = """usage: %prog
 
-For the --solver options you can give:
-* SWDiA5BY.alt.vd.res.va2.15000.looseres.3tierC5/binary/SWDiA5BY_static
-* lingeling_ayv/binary/lingeling"""
+To use other solvers, give:
+--solver SWDiA5BY.alt.vd.res.va2.15000.looseres.3tierC5/binary/SWDiA5BY_static.alt.vd
+--solver SWDiA5BY_A26/binary/SWDiA5BY_static_A26
+--solver lingeling_ayv/binary/lingeling_ayv
+--solver glucose2016/simp/glucose_static_2016
+--solver MapleCOMSPS/simp/maplecomsps_static
+--solver cmsat-satcomp16/bin/cryptominisat4_simple
+--solver lingeling-bbc/build/lingeling/lingeling_bbc
+--solver Maple_LCM_Dist/Maple_LCM_Dist # may work with --drat, but needs updated DRAT checker
+
+
+Use-cases:
+# normal run
+./launch_server.py --cnflist satcomp17_updated
+
+# stats run
+./launch_server.py --cnf test_updated --stats --drat --tout 600 --memlimit 10000
+./launch_server.py --cnf unsat_small_candidates_fullpath --stats --drat --tout 600 --memlimit 10000
+
+
+# testing, using small instance to check (cheaper & faster)
+./launch_server.py --cnflist test_updated
+
+# 2 clients, no preprocessing
+./launch_server.py --cnflist satcomp14 -c 2 --opt "--preproc 0" --folder no_preproc
+
+# gaussian elimination -- automatic detection, built with GAUSS
+./launch_server.py --cnflist satcomp14 --folder gauss
+
+# clause IDs so learning can be performed -- gzipped SQL output with clause IDs will be produced
+./launch_server.py --stats --drat --folder learning
+
+# to give options to the solver
+./launch_server.py --folder with_opts --opt \"--ml=1,--keepglue=4\""
+
+ # to upload features_to_reconf.cpp
+aws s3 cp ../../src/features_to_reconf.cpp s3://msoos-solve-data/solvers/
+
+"""
     parser = optparse.OptionParser(usage=usage, formatter=PlainHelpFormatter())
     parser.add_option("--verbose", "-v", action="store_true",
                       default=False, dest="verbose", help="Be more verbose"
                       )
 
-    parser.add_option("--numclients", "-c", default=1, type=int,
+    parser.add_option("--numclients", "-c", default=None, type=int,
                       dest="client_count", help="Number of clients to launch"
                       )
 
@@ -34,7 +88,7 @@ For the --solver options you can give:
                       help="Port to listen on. [default: %default]", type="int"
                       )
 
-    parser.add_option("--tout", "-t", default=1500, dest="timeout_in_secs",
+    parser.add_option("--tout", "-t", default=3000, dest="timeout_in_secs",
                       help="Timeout for the file in seconds"
                       "[default: %default]",
                       type=int
@@ -52,31 +106,25 @@ For the --solver options you can give:
                       type=int
                       )
 
-    parser.add_option("--cnflist", default="satcomp14", dest="cnf_list",
+    parser.add_option("--cnflist", default="satcomp14_updated", dest="cnf_list",
                       type=str,
                       help="The list of CNF files to solve, first line the dir"
                       "[default: %default]",
                       )
 
     parser.add_option("--dir", default="/home/ubuntu/", dest="base_dir", type=str,
-                      help="The home dir of cryptominisat"
+                      help="The home dir of cryptominisat [default: %default]"
                       )
 
     parser.add_option("--solver",
-                      default="cryptominisat/build/cryptominisat4",
+                      default="cryptominisat/build/cryptominisat5",
                       dest="solver",
                       help="Solver executable"
                       "[default: %default]",
                       type=str
                       )
 
-    parser.add_option("--s3bucket", default="msoos-solve-results",
-                      dest="s3_bucket", help="S3 Bucket to upload finished data"
-                      "[default: %default]",
-                      type=str
-                      )
-
-    parser.add_option("--s3folder", default="results", dest="s3_folder",
+    parser.add_option("--folder", default="results", dest="given_folder",
                       help="S3 folder name to upload data"
                       "[default: %default]",
                       type=str
@@ -103,20 +151,42 @@ For the --solver options you can give:
                       action="store_true", help="Use STATS and get SQLITE data"
                       )
 
+    parser.add_option("--gauss", default=False, dest="gauss",
+                      action="store_true", help="Use GAUSS"
+                      )
+
     parser.add_option("--logfile", dest="logfile_name", type=str,
-                      default="python_server_log.txt", help="Name of LOG file")
+                      default="python_server_log.log", help="Name of LOG file")
 
     # parse options
     options, args = parser.parse_args()
+    conf = configparser.ConfigParser()
+    if options.cnf_list == "test":
+        conf.read('ec2-spot-instance-test.cfg')
+    else:
+        conf.read('ec2-spot-instance.cfg')
+
+    options.s3_bucket = conf.get("ec2", "result_bucket")
+    options.key_name = conf.get("ec2", "key_name")
+    options.security_group_server = conf.get("ec2", "security_group_server")
+    options.subnet_id = conf.get("ec2", "subnet_id")
+    options.ami_id = conf.get("ec2", "ami_id")
+    options.region = conf.get("ec2", "region")
 
     def rnd_id():
         return ''.join(random.choice(string.ascii_uppercase + string.digits) for _ in range(5))
 
     options.logfile_name = options.base_dir + options.logfile_name
-    options.s3_folder += "-" + time.strftime("%d-%B-%Y")
-    options.s3_folder += "-%s" % rnd_id()
+    options.given_folder += "-" + time.strftime("%d-%B-%Y")
+    options.given_folder += "-%s" % rnd_id()
+    options.given_folder += "-%s" % options.cnf_list
+
+    if options.drat and not options.stats:
+        print("ERROR: You must have --stats when you use --drat")
+        exit(-1)
 
     return options, args
+
 
 if __name__ == "__main__":
     options, args = parse_arguments()

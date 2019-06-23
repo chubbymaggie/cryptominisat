@@ -24,30 +24,23 @@ THE SOFTWARE.
 #ifndef __MAIN_COMMON_H__
 #define __MAIN_COMMON_H__
 
-#include "cryptominisat4/cryptominisat.h"
+#include "cryptominisat5/cryptominisat.h"
+#include "solverconf.h"
 #include <iostream>
 #include <cmath>
 
-void print_model(std::ostream* os, CMSat::SATSolver* solver)
+class MainCommon
 {
-    *os << "v ";
-    size_t line_size = 2;
-    for (uint32_t var = 0; var < solver->nVars(); var++) {
-        if (solver->get_model()[var] != CMSat::l_Undef) {
-            const bool value_is_positive = (solver->get_model()[var] == CMSat::l_True);
-            const size_t this_var_size = std::ceil(std::log10(var+1)) + 1 + !value_is_positive;
-            line_size += this_var_size;
-            if (line_size > 80) {
-                *os << std::endl << "v ";
-                line_size = 2 + this_var_size;
-            }
-            *os << (value_is_positive? "" : "-") << var+1 << " ";
-        } else {
-            //*os << "(UNDEF " << var+1 << ") ";
-        }
-    }
+public:
+    uint32_t print_model(CMSat::SATSolver* solver, std::ostream* os);
+    void handle_drat_option();
 
-    *os << "0" << std::endl;
-}
+    string dratfilname;
+    bool dratDebug = false;
+    std::ostream* dratf = NULL;
+    bool zero_exit_status = false;
+    CMSat::SolverConf conf;
+    unsigned num_threads = 1;
+};
 
 #endif //__MAIN_COMMON_H__

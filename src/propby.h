@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef PROPBY_H
 #define PROPBY_H
@@ -32,7 +33,7 @@
 
 namespace CMSat {
 
-enum PropByType {null_clause_t = 0, clause_t = 1, binary_t = 2, tertiary_t = 3};
+enum PropByType {null_clause_t = 0, clause_t = 1, binary_t = 2};
 
 class PropBy
 {
@@ -100,15 +101,6 @@ class PropBy
                 | ((uint32_t)hyperBinNotAdded) << 2;
         }
 
-        //Tertiary prop
-        PropBy(const Lit lit1, const Lit lit2, const bool redStep) :
-            red_step(redStep)
-            , data1(lit1.toInt())
-            , type(tertiary_t)
-            , data2(lit2.toInt())
-        {
-        }
-
         bool isRedStep() const
         {
             return red_step;
@@ -157,17 +149,9 @@ class PropBy
         Lit lit2() const
         {
             #ifdef DEBUG_PROPAGATEFROM
-            assert(type == tertiary_t || type == binary_t);
+            assert(type == binary_t);
             #endif
             return Lit::toLit(data1);
-        }
-
-        Lit lit3() const
-        {
-            #ifdef DEBUG_PROPAGATEFROM
-            assert(type == tertiary_t);
-            #endif
-            return Lit::toLit(data2);
         }
 
         ClOffset get_offset() const
@@ -203,10 +187,6 @@ inline std::ostream& operator<<(std::ostream& os, const PropBy& pb)
     switch (pb.getType()) {
         case binary_t :
             os << " binary, other lit= " << pb.lit2();
-            break;
-
-        case tertiary_t :
-            os << " tri, other 2 lits= " << pb.lit2() << " , "<< pb.lit3();
             break;
 
         case clause_t :

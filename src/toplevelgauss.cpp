@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
- */
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "toplevelgauss.h"
 #include "time_mem.h"
@@ -40,8 +41,9 @@ TopLevelGauss::TopLevelGauss(Solver* _solver) :
     m4ri_build_all_codes();
 }
 
-bool TopLevelGauss::toplevelgauss(const vector<Xor>& _xors)
+bool TopLevelGauss::toplevelgauss(const vector<Xor>& _xors, vector<Lit>* _out_changed_occur)
 {
+    out_changed_occur = _out_changed_occur;
     runStats.clear();
     runStats.numCalls = 1;
     xors = _xors;
@@ -49,7 +51,7 @@ bool TopLevelGauss::toplevelgauss(const vector<Xor>& _xors)
     size_t origTrailSize = solver->trail_size();
     extractInfo();
 
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         runStats.print_short(solver);
     }
     runStats.zeroDepthAssigns = solver->trail_size() - origTrailSize;
@@ -62,7 +64,7 @@ bool TopLevelGauss::toplevelgauss(const vector<Xor>& _xors)
     }
     globalStats += runStats;
 
-    return solver->ok;
+    return solver->okay();
 }
 
 struct XorSorter{
@@ -153,7 +155,7 @@ bool TopLevelGauss::extractInfo()
 end:
     runStats.extractTime += cpuTime() - myTime;
 
-    return solver->ok;
+    return solver->okay();
 }
 
 bool TopLevelGauss::extractInfoFromBlock(
@@ -184,10 +186,14 @@ bool TopLevelGauss::extractInfoFromBlock(
     assert(thisXors.size() > 1 && "We pre-filter the set such that *every* block contains at least 2 xors");
 
     //Set up matrix
-    size_t numCols = block.size()+1; //we need augmented column
-    size_t matSize = numCols*thisXors.size();
+    uint64_t numCols = block.size()+1; //we need augmented column
+    uint64_t matSize = numCols*thisXors.size();
+    matSize /= 1000ULL*1000ULL;
     if (matSize > solver->conf.maxXORMatrix) {
         //this matrix is way too large, skip :(
+        if (solver->conf.verbosity) {
+            cout << "c skipping matrix " << thisXors.size() << " x " << numCols << " size:" << matSize << endl;
+        }
         return solver->okay();
     }
     mzd_t *mat = mzd_init(thisXors.size(), numCols);
@@ -215,7 +221,7 @@ bool TopLevelGauss::extractInfoFromBlock(
     }
 
     //Fully echelonize
-    mzd_echelonize(mat, true);
+    mzd_echelonize_pluq(mat, true);
 
     //Examine every row if it gives some new short truth
     vector<Lit> lits;
@@ -254,6 +260,7 @@ bool TopLevelGauss::extractInfoFromBlock(
 
             case 2: {
                 runStats.newBins++;
+                out_changed_occur->insert(out_changed_occur->end(), lits.begin(), lits.end());
                 solver->add_xor_clause_inter(lits, rhs, false);
                 if (!solver->okay())
                     goto end;
@@ -384,8 +391,8 @@ void TopLevelGauss::cutIntoBlocks(const vector<size_t>& xorsToUse)
         runStats.numVarsInBlocks += it->size();
     }
 
-    if (solver->conf.verbosity >= 2) {
-        cout << "c Sum vars in blocks: " << runStats.numVarsInBlocks << endl;
+    if (solver->conf.verbosity) {
+        cout << "c [xor-m4ri] Sum vars in blocks: " << runStats.numVarsInBlocks << endl;
     }
 }
 
@@ -409,13 +416,13 @@ size_t TopLevelGauss::mem_used() const
 void TopLevelGauss::Stats::print_short(const Solver* solver) const
 {
     cout
-    << "c [occ-xor] cut into " << numBlocks << " blcks. "
+    << "c [xor-m4ri] cut into " << numBlocks << " blcks. "
     << " Vars in blcks: " << numVarsInBlocks
     << solver->conf.print_times(blockCutTime)
     << endl;
 
     cout
-    << "c [occ-xor] extr info. "
+    << "c [xor-m4ri] extr info. "
     << " unit: " << newUnits
     << " bin: " << newBins
     << " 0-depth-ass: " << zeroDepthAssigns

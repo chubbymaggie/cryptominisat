@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
- */
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "gatefinder.h"
 #include "time_mem.h"
@@ -60,7 +61,7 @@ bool GateFinder::doAll()
 
 end:
     solver->clean_occur_from_idx_types_only_smudged();
-    if (solver->conf.verbosity >= 1) {
+    if (solver->conf.verbosity) {
         if (solver->conf.verbosity >= 3) {
             runStats.print(solver->nVars());
         }
@@ -71,7 +72,7 @@ end:
     orGates.shrink_to_fit();
     solver->sumSearchStats.num_gates_found_last = orGates.size();
 
-    return solver->ok;
+    return solver->okay();
 }
 
 void GateFinder::find_or_gates_and_update_stats()
@@ -111,7 +112,7 @@ void GateFinder::find_or_gates_and_update_stats()
         );
     }
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout << "c [occ-gates] found"
         << " irred:" << runStats.numIrred
         << " avg-s: " << std::fixed << std::setprecision(1)
@@ -164,7 +165,7 @@ bool GateFinder::shorten_with_all_or_gates()
         );
     }
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout << "c [occ-gates] shorten"
         << " cl: " << std::setw(5) << runStats.orGateUseful
         << " l-rem: " << std::setw(6) << runStats.litsRem
@@ -172,7 +173,7 @@ bool GateFinder::shorten_with_all_or_gates()
         << endl;
     }
 
-    return solver->ok;
+    return solver->okay();
 }
 
 bool GateFinder::remove_clauses_with_all_or_gates()
@@ -214,7 +215,7 @@ bool GateFinder::remove_clauses_with_all_or_gates()
         );
     }
 
-    if (solver->conf.verbosity >= 2) {
+    if (solver->conf.verbosity) {
         cout << "c [occ-gates] rem"
         << " cl: " << runStats.andGateUseful
         << " avg s: " << std::setprecision(1)
@@ -223,7 +224,7 @@ bool GateFinder::remove_clauses_with_all_or_gates()
         << endl;
     }
 
-    return solver->ok;
+    return solver->okay();
 }
 
 bool GateFinder::all_simplifications_with_gates()
@@ -259,7 +260,7 @@ bool GateFinder::all_simplifications_with_gates()
             );
         }
 
-        if (solver->conf.verbosity >= 2) {
+        if (solver->conf.verbosity) {
             cout << "c [occ-gates] eqlit"
             << " v-rep: " << std::setw(3) << runStats.varReplaced
             << solver->conf.print_times(time_used)
@@ -270,7 +271,7 @@ bool GateFinder::all_simplifications_with_gates()
             return false;
     }
 
-    return solver->ok;
+    return solver->okay();
 }
 
 size_t GateFinder::findEqOrGates()

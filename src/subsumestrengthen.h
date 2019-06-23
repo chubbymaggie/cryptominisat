@@ -1,29 +1,30 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #ifndef __SUBSUMESTRENGTHEN_H__
 #define __SUBSUMESTRENGTHEN_H__
 
 #include "cloffset.h"
-#include "cryptominisat4/solvertypesmini.h"
+#include "cryptominisat5/solvertypesmini.h"
 #include "clabstraction.h"
 #include "clause.h"
 #include <vector>
@@ -41,23 +42,21 @@ public:
     SubsumeStrengthen(OccSimplifier* simplifier, Solver* solver);
     size_t mem_used() const;
 
-    void backward_subsumption_long_with_long();
-    bool backward_strengthen_long_with_long();
-    bool backward_sub_str_with_bins_tris();
+    void backw_sub_long_with_long();
+    bool backw_str_long_with_long();
+    bool backw_sub_str_long_with_bins();
 
     //Called from simplifier at resolvent-adding of var-elim
     uint32_t subsume_and_unlink_and_markirred(const ClOffset offset);
-    bool backw_sub_str_with_bin_tris_watch(
+    bool backw_sub_str_long_with_bins_watch(
         const Lit lit
         , const bool redundant_too = false
     );
-    bool handle_sub_str_with(size_t orig_limit = 400ULL*1000ULL*1000ULL);
-
-    //bool subsumeWithTris();
+    bool handle_added_long_cl(int64_t* limit, const bool main_run);
 
     struct Sub0Ret {
-        bool subsumedIrred = 0;
         ClauseStats stats;
+        bool subsumedIrred = 0;
         uint32_t numSubsumed = 0;
     };
 
@@ -75,7 +74,7 @@ public:
         bool subsumedIrred = false;
     };
 
-    Sub1Ret sub_str_with_implicit(const vector<Lit>& lits);
+    Sub1Ret backw_sub_str_long_with_implicit(const vector<Lit>& lits);
     Sub1Ret strengthen_subsume_and_unlink_and_markirred(ClOffset offset);
 
     struct Stats
@@ -159,8 +158,6 @@ private:
     size_t tried_bin_tri = 0;
     uint64_t subsumedBin = 0;
     uint64_t strBin = 0;
-    uint64_t subsumedTri = 0;
-    uint64_t strTri = 0;
 };
 
 inline const SubsumeStrengthen::Stats& SubsumeStrengthen::getRunStats() const

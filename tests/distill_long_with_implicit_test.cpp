@@ -1,23 +1,24 @@
-/*
- * CryptoMiniSat
- *
- * Copyright (c) 2009-2015, Mate Soos. All rights reserved.
- *
- * This library is free software; you can redistribute it and/or
- * modify it under the terms of the GNU Lesser General Public
- * License as published by the Free Software Foundation
- * version 2.0 of the License.
- *
- * This library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
- * Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public
- * License along with this library; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston,
- * MA 02110-1301  USA
-*/
+/******************************************
+Copyright (c) 2016, Mate Soos
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+***********************************************/
 
 #include "gtest/gtest.h"
 
@@ -36,7 +37,8 @@ struct distill_long_with_impl : public ::testing::Test {
         must_inter.store(false, std::memory_order_relaxed);
         SolverConf conf;
         conf.doStamp = true;
-        conf.otfHyperbin = true;
+        conf.doCache = true;
+        conf.otfHyperbin - true;
         //conf.verbosity = 20;
         s = new Solver(&conf, &must_inter);
         distillwbin = s->dist_long_with_impl;
@@ -83,30 +85,6 @@ TEST_F(distill_long_with_impl, subsume_w_bin3)
 
     distillwbin->distill_long_with_implicit(false);
     check_irred_cls_eq(s, "2, 3");
-}
-
-
-//Subsume long with tri
-
-TEST_F(distill_long_with_impl, subsume_w_tri)
-{
-    s->new_vars(4);
-    s->add_clause_outer(str_to_cl("1, -2, -3"));
-    s->add_clause_outer(str_to_cl("1, -2, -3, 4"));
-
-    distillwbin->distill_long_with_implicit(false);
-    check_irred_cls_eq(s, "1, -2, -3");
-}
-
-TEST_F(distill_long_with_impl, subsume2_w_tri2)
-{
-    s->new_vars(5);
-    s->add_clause_outer(str_to_cl("1, -2, 4"));
-    s->add_clause_outer(str_to_cl("1, -2, 3, 4"));
-    s->add_clause_outer(str_to_cl("1, -2, 4, -5"));
-
-    distillwbin->distill_long_with_implicit(false);
-    check_irred_cls_eq(s, "1, -2, 4");
 }
 
 //No subsumption
@@ -163,41 +141,6 @@ TEST_F(distill_long_with_impl, str_w_bin3)
     distillwbin->distill_long_with_implicit(true);
     check_irred_cls_contains(s, "-2, 4, 5");
     check_irred_cls_contains(s, "-1, -3, 4");
-}
-
-
-//Strengthening long with tri
-
-TEST_F(distill_long_with_impl, str_w_tri)
-{
-    s->new_vars(5);
-    s->add_clause_outer(str_to_cl("-1, -2, 3"));
-    s->add_clause_outer(str_to_cl("-1, 2, 3, 4"));
-
-    distillwbin->distill_long_with_implicit(true);
-    check_irred_cls_contains(s, "-1, 3, 4");
-}
-
-TEST_F(distill_long_with_impl, str_w_tri2)
-{
-    s->new_vars(5);
-    s->add_clause_outer(str_to_cl("-1, -2, -5"));
-    s->add_clause_outer(str_to_cl("-1, 2, 3, -5"));
-
-    distillwbin->distill_long_with_implicit(true);
-    check_irred_cls_contains(s, "-1, 3, -5");
-}
-
-TEST_F(distill_long_with_impl, str_w_tri3)
-{
-    s->new_vars(5);
-    s->add_clause_outer(str_to_cl("-2, -3, 5"));
-    s->add_clause_outer(str_to_cl("-2, 3, 4, 5"));
-    s->add_clause_outer(str_to_cl("-1, 2, -3, 4, 5"));
-
-    distillwbin->distill_long_with_implicit(true);
-    check_irred_cls_contains(s, "-2, 4, 5");
-    check_irred_cls_contains(s, "-1, -3, 4, 5");
 }
 
 //Subsume with cache
